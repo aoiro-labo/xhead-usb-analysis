@@ -16,7 +16,7 @@
 | gRPCプロトコルの完全再構成（`.proto`、DLL非依存で再実装可能） | 完了 | [docs/protocol/README.md](docs/protocol/README.md) |
 | 実機からの変調パラメータ確定（FieldID・許容値） | 完了 | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) |
 | 独自送出ツール: 読み取り（プロパティツリーのダンプ） | 完了 | `tools/custom_sender` |
-| 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 検証中 | Source/Content配線を含むフルパイプラインを実装済み。実機での送出成功確認は次回に持ち越し |
+| 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 検証中 | `ChannelOpen`〜`SourceOpen`まではクラッシュせず成功。Source側のファイル解析完了を検知する経路が未解明で、`ProgramApply`/`ChannelStart`成功はまだ未達成 |
 | RTL-SDRループバックでの実信号検証 | 未着手 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) |
 | `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 未着手 | [tools/usb_capture](tools/usb_capture) |
 

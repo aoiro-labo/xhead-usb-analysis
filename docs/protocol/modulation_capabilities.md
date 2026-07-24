@@ -98,7 +98,30 @@ gRPC接続そのものが切断され(`Stream removed`)、プロセスが完全�
   ネイティブ側がnullな参照にアクセスした（未処理例外/アクセス違反）と推測される。
 - **今後Startを試す際は、必ず先にSource(例: Colorbarテストパターン等の内蔵信号源)を
   `CmdSourceOpen`→`CmdSourceStart`し、`CmdProgramAdd`後に`msMediaContent`経由でstreamを
-  結びつけてから`CmdChannelStart`を呼ぶこと。** 詳細な手順は未実装（次のステップ）。
+  結びつけてから`CmdChannelStart`を呼ぶこと。**
+
+### Source接続時の追加調査 (2026-07-25)
+
+`ChannelOpen → ProgramAdd → ProgramCommit → SourceOpen(Mode=SourceUrl)` まではクラッシュせず
+`ResultSuccess`で進行することを確認した。ただし以下の理由で `ProgramApply`/`ChannelStart` まで
+到達できていない。
+
+- `CmdSourceOpen` の応答は即座に返るが、`Status=StatusPrepare`・`Content.Programs=0`の空状態。
+  実際のファイル解析（Media Foundationによるコーデック/フォーマット検出、
+  `mff_function.cc`の警告ログが大量に出る）は非同期に進み、46MBのTSファイルで**約9秒**かかった
+  （ネイティブログ: `mnsource.cc:243] source[...] status changed : [3]`）。
+- `subscribeService`のイベントストリームを実装し (`EventWatcher`クラス, `tools/custom_sender`)、
+  `EventSourceStatus`イベントが届くことは確認したが、**このイベントは`msStatus`の値のみを運び、
+  更新された`Content`(Programs/Streams)は一切含まない**（デコンパイル済み
+  `mnClient.handleSource()`でも`item.Status`をラッパーに反映するだけで完結しており、
+  Content再取得の経路が無いことをコードレベルでも確認）。
+- 専用の「Source再取得」RPCは存在しない。`CmdSourceApply`は逆に「呼び出し側が既に把握している
+  Streamを送り込む」ためのコマンドであり、探索には使えない。
+- 現時点での仮説: 実際のGUIは`CmdSourceOpen`の応答が返った時点で同期的にContentが埋まっている
+  ケース（高速なソース）を前提にしているか、あるいは本解析では気づけていない別の待ち合わせ
+  手段が存在する。ネイティブ側 (`mnsource.cc`) の解析が必要。
+
+この調査中はクラッシュを一切再現しておらず、実機・サービスとも健全な状態を維持できている。
 
 ## 取得方法（再現手順）
 

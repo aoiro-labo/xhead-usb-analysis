@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Threading.Tasks;
 using Grpc.Core;
 using mnFramework.grpc;
 
@@ -10,6 +13,62 @@ namespace XHeadSender
     /// 事前条件: XHEAD-STUDIO をインストール後、mnservice.exe (または xhead_studio.exe) が
     /// 起動しており、localhost:50051 で待ち受けていること。
     /// </summary>
+    /// <summary>
+    /// Consumes the subscribeService server-streaming event feed in the background, mirroring
+    /// mnClient.handleClientProcess()'s "await reader_.ResponseStream.MoveNext()" loop. Keeps the
+    /// latest msSource seen per HandleID so callers can poll for async readiness (e.g. a URL
+    /// source finishing probing a file) without a dedicated "get source" RPC, which doesn't exist.
+    /// </summary>
+    internal sealed class EventWatcher
+    {
+        private readonly ConcurrentDictionary<uint, msSource> _latestSources = new ConcurrentDictionary<uint, msSource>();
+        private Task _pump;
+
+        public void Start(msBroadcastService.msBroadcastServiceClient client, uint clientId)
+        {
+            var req = new msRequest { Cmd = msServiceCmd.CmdSubscribe, ClientID = clientId };
+            var call = client.subscribeService(req);
+            _pump = Task.Run(async () =>
+            {
+                try
+                {
+                    while (await call.ResponseStream.MoveNext(CancellationToken.None))
+                    {
+                        var ev = call.ResponseStream.Current;
+                        if (ev.ParamCase == msEvent.ParamOneofCase.Source)
+                        {
+                            _latestSources[ev.HandleID] = ev.Source;
+                            Console.WriteLine($"  [event] {ev.ID} HandleID={ev.HandleID} Source.Status={ev.Source.Status} Programs={ev.Source.Content?.Programs.Count ?? 0}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"  [event] {ev.ID} HandleID={ev.HandleID} ParamCase={ev.ParamCase}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  [event] stream ended: {ex.Message}");
+                }
+            });
+        }
+
+        public msSource WaitForReadySource(uint sourceHandle, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                if (_latestSources.TryGetValue(sourceHandle, out var src) && (src.Content?.Programs.Count ?? 0) > 0)
+                {
+                    return src;
+                }
+                Thread.Sleep(200);
+            }
+            _latestSources.TryGetValue(sourceHandle, out var last);
+            return last;
+        }
+    }
+
     internal static class Program
     {
         private const string ServiceAddress = "localhost:50051";
@@ -68,6 +127,9 @@ namespace XHeadSender
                 if (response.Result == msResult.ResultSuccess)
                 {
                     Console.WriteLine("[XHeadSender] connectService OK.");
+
+                    var watcher = new EventWatcher();
+                    watcher.Start(client, response.Client.HandleID);
 
                     var msClient = response.Client;
                     uint firstModulationOutputHandle = 0;
@@ -147,9 +209,10 @@ namespace XHeadSender
                             // "unknown property" (Properties at Open-time are scoped to the OUTPUT,
                             // which has none). Reading xTaskStartChannel.cs / xHeadConfig.applyChannel
                             // in the decompiled GUI shows the real flow: modulation/channel/codec/EPG
-                            // properties ride along with CmdChannelStart, not Open. Reproduce that:
-                            // Open -> ProgramAdd -> ProgramCommit -> ChannelStart(with Properties).
-                            RunChannelStartTest(client, msClient.HandleID, firstModulationOutputHandle);
+                            // properties ride along with CmdChannelStart, not Open. Calling
+                            // ChannelStart with no Source/Content attached crashes mnservice.exe
+                            // natively (confirmed 2026-07-24) -- so wire up a real Source first.
+                            RunFullPipelineTest(client, msClient, firstModulationOutputHandle, watcher);
                         }
                         else if (openResp.ParamCase == msResponse.ParamOneofCase.ErrMessage)
                         {
@@ -183,39 +246,156 @@ namespace XHeadSender
             }
         }
 
-        private static void RunChannelStartTest(msBroadcastService.msBroadcastServiceClient client, uint clientId, uint outputHandle)
+        private const string TestSourceFile = @"C:\Users\aoiro\Videos\ts\Record_20251109-210722.ts";
+
+        private static void RunFullPipelineTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher)
         {
+            uint clientId = msClient.HandleID;
             Console.WriteLine();
-            Console.WriteLine("=== CmdChannelStart test (Constellation -> QPSK) ===");
+            Console.WriteLine("=== Full pipeline test: ChannelOpen -> ProgramAdd/Commit -> SourceOpen -> ProgramApply -> SourceStart -> ChannelStart ===");
+            Console.Out.Flush();
 
             var openReq = new msRequest
             {
                 Cmd = msServiceCmd.CmdChannelOpen,
                 ClientID = clientId,
                 HandleID = outputHandle,
-                Channel = new msChannelParam { Name = "XHeadSenderStartTest" }
+                Channel = new msChannelParam { Name = "XHeadSenderFullTest" }
             };
             var openResp = client.sendRequest(openReq, deadline: DateTime.UtcNow.AddSeconds(5));
             Console.WriteLine($"  ChannelOpen: Result={openResp.Result} ParamCase={openResp.ParamCase}" +
                 (openResp.HasErrMessage ? $" ErrMessage={openResp.ErrMessage}" : ""));
+            Console.Out.Flush();
             if (openResp.ParamCase != msResponse.ParamOneofCase.Channel) return;
-            var ch = openResp.Channel;
-            uint chHandle = ch.HandleID;
+            uint chHandle = openResp.Channel.HandleID;
 
             var addReq = new msRequest { Cmd = msServiceCmd.CmdProgramAdd, ClientID = clientId, HandleID = chHandle };
             var addResp = client.sendRequest(addReq, deadline: DateTime.UtcNow.AddSeconds(5));
             Console.WriteLine($"  ProgramAdd: Result={addResp.Result} ParamCase={addResp.ParamCase}" +
                 (addResp.HasErrMessage ? $" ErrMessage={addResp.ErrMessage}" : ""));
-
-            int programIndex = 0;
-            if (addResp.ParamCase == msResponse.ParamOneofCase.Program)
+            Console.Out.Flush();
+            if (addResp.ParamCase != msResponse.ParamOneofCase.Program)
             {
-                programIndex = addResp.Program.Index;
-                var commitReq = new msRequest { Cmd = msServiceCmd.CmdProgramCommit, ClientID = clientId, HandleID = chHandle, Index = programIndex };
-                var commitResp = client.sendRequest(commitReq, deadline: DateTime.UtcNow.AddSeconds(5));
-                Console.WriteLine($"  ProgramCommit: Result={commitResp.Result}" +
-                    (commitResp.HasErrMessage ? $" ErrMessage={commitResp.ErrMessage}" : ""));
+                CloseChannel(client, clientId, chHandle);
+                return;
             }
+            int programIndex = addResp.Program.Index;
+
+            var commitReq = new msRequest { Cmd = msServiceCmd.CmdProgramCommit, ClientID = clientId, HandleID = chHandle, Index = programIndex };
+            var commitResp = client.sendRequest(commitReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramCommit: Result={commitResp.Result}" +
+                (commitResp.HasErrMessage ? $" ErrMessage={commitResp.ErrMessage}" : ""));
+            Console.Out.Flush();
+            if (commitResp.Result != msResult.ResultSuccess)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+
+            Console.WriteLine($"  Opening source: {TestSourceFile}");
+            var sourceOpenReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdSourceOpen,
+                ClientID = clientId,
+                Source = new msSourceParam
+                {
+                    Mode = msSourceMode.SourceUrl,
+                    Name = "XHeadSenderSource",
+                    URL = new msURLParam { Url = TestSourceFile, Mode = msURLMode.Local }
+                }
+            };
+            var sourceResp = client.sendRequest(sourceOpenReq, deadline: DateTime.UtcNow.AddSeconds(10));
+            Console.WriteLine($"  SourceOpen: Result={sourceResp.Result} ParamCase={sourceResp.ParamCase}" +
+                (sourceResp.HasErrMessage ? $" ErrMessage={sourceResp.ErrMessage}" : ""));
+            Console.Out.Flush();
+            if (sourceResp.ParamCase != msResponse.ParamOneofCase.Source)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            var src = sourceResp.Source;
+            Console.WriteLine($"  Source: HandleID={src.HandleID} Status={src.Status} Mode={src.Mode} Programs={src.Content?.Programs.Count ?? 0}");
+            foreach (var p in src.Content?.Programs ?? new Google.Protobuf.Collections.RepeatedField<msContent.Types.Program>())
+            {
+                Console.WriteLine($"    Program ID={p.ID} Streams={p.Streams.Count}");
+                foreach (var s in p.Streams)
+                {
+                    Console.WriteLine($"      Stream Index={s.Index} ID={s.ID} Format={s.Format}");
+                }
+            }
+            Console.Out.Flush();
+
+            // The GUI (xTaskStartChannel) polls source_.Status until StatusReady before applying
+            // content. There is no "get source" RPC, so the only way to observe the async file
+            // probe finishing is the subscribeService event stream (EventSource* with an updated
+            // msSource carrying Content once ready).
+            if ((src.Content?.Programs.Count ?? 0) == 0)
+            {
+                Console.WriteLine("  Source not ready yet, waiting on event stream (up to 10s)...");
+                var updated = watcher.WaitForReadySource(src.HandleID, TimeSpan.FromSeconds(10));
+                if (updated != null) src = updated;
+            }
+
+            if ((src.Content?.Programs.Count ?? 0) == 0)
+            {
+                Console.WriteLine("  Source has no probed programs/streams -- aborting before ProgramApply.");
+                CloseSource(client, clientId, src.HandleID);
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+
+            var program0 = src.Content.Programs[0];
+            var content = new msMediaContent
+            {
+                Index = 0,
+                SourceID = src.HandleID,
+                ProgramID = (uint)programIndex,
+                EngineID = msClient.Engines.Count > 0 ? msClient.Engines[0].HandleID : 0
+            };
+            foreach (var s in program0.Streams)
+            {
+                var contentStream = new msMediaContent.Types.Stream { Index = s.Index };
+                contentStream.Nodes.Add(new msMediaContent.Types.Node { Mode = msMediaContent.Types.NodeMode.NodePassthrough });
+                content.Streams.Add(contentStream);
+            }
+            Console.WriteLine($"  Built msMediaContent: SourceID={content.SourceID} ProgramID={content.ProgramID} EngineID={content.EngineID} Streams={content.Streams.Count}");
+            Console.Out.Flush();
+
+            var applyReq = new msRequest { Cmd = msServiceCmd.CmdProgramApply, ClientID = clientId, HandleID = chHandle, Content = content };
+            msResponse applyResp;
+            try
+            {
+                applyResp = client.sendRequest(applyReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine($"  ProgramApply: Result={applyResp.Result}" +
+                    (applyResp.HasErrMessage ? $" ErrMessage={applyResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  ProgramApply RPC error: {ex.Status}");
+                applyResp = null;
+            }
+            Console.Out.Flush();
+            if (applyResp == null || applyResp.Result != msResult.ResultSuccess)
+            {
+                CloseSource(client, clientId, src.HandleID);
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+
+            var sourceStartReq = new msRequest { Cmd = msServiceCmd.CmdSourceStart, ClientID = clientId, HandleID = src.HandleID };
+            msResponse sourceStartResp;
+            try
+            {
+                sourceStartResp = client.sendRequest(sourceStartReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine($"  SourceStart: Result={sourceStartResp.Result} Status={sourceStartResp.Status}" +
+                    (sourceStartResp.HasErrMessage ? $" ErrMessage={sourceStartResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  SourceStart RPC error: {ex.Status}");
+                sourceStartResp = null;
+            }
+            Console.Out.Flush();
 
             // Full field set for mModulationParam, mirroring mnPropertiesParam.enumFields():
             // every leaf (Number/Select) field at its current/default value, Constellation changed.
@@ -236,7 +416,9 @@ namespace XHeadSender
             msResponse startResp;
             try
             {
-                startResp = client.sendRequest(startReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine("  Calling ChannelStart now...");
+                Console.Out.Flush();
+                startResp = client.sendRequest(startReq, deadline: DateTime.UtcNow.AddSeconds(10));
                 Console.WriteLine($"  ChannelStart: Result={startResp.Result} Status={startResp.Status} ParamCase={startResp.ParamCase}" +
                     (startResp.HasErrMessage ? $" ErrMessage={startResp.ErrMessage}" : ""));
             }
@@ -245,20 +427,37 @@ namespace XHeadSender
                 Console.WriteLine($"  ChannelStart RPC error: {ex.Status}");
                 startResp = null;
             }
+            Console.Out.Flush();
 
             if (startResp != null && startResp.Result == msResult.ResultSuccess)
             {
-                Console.WriteLine("  Channel started. Waiting 3s before checking status / stopping...");
-                System.Threading.Thread.Sleep(3000);
+                Console.WriteLine("  Channel started successfully! Waiting 5s (check RTL-SDR now) before stopping...");
+                Console.Out.Flush();
+                System.Threading.Thread.Sleep(5000);
 
                 var stopReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };
                 var stopResp = client.sendRequest(stopReq, deadline: DateTime.UtcNow.AddSeconds(5));
                 Console.WriteLine($"  ChannelStop: Result={stopResp.Result}");
             }
 
+            var sourceStopReq = new msRequest { Cmd = msServiceCmd.CmdSourceStop, ClientID = clientId, HandleID = src.HandleID };
+            client.sendRequest(sourceStopReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            CloseSource(client, clientId, src.HandleID);
+            CloseChannel(client, clientId, chHandle);
+        }
+
+        private static void CloseChannel(msBroadcastService.msBroadcastServiceClient client, uint clientId, uint chHandle)
+        {
             var closeReq = new msRequest { Cmd = msServiceCmd.CmdChannelClose, ClientID = clientId, HandleID = chHandle };
             var closeResp = client.sendRequest(closeReq, deadline: DateTime.UtcNow.AddSeconds(5));
             Console.WriteLine($"  ChannelClose: Result={closeResp.Result}");
+        }
+
+        private static void CloseSource(msBroadcastService.msBroadcastServiceClient client, uint clientId, uint srcHandle)
+        {
+            var closeReq = new msRequest { Cmd = msServiceCmd.CmdSourceClose, ClientID = clientId, HandleID = srcHandle };
+            var closeResp = client.sendRequest(closeReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  SourceClose: Result={closeResp.Result}");
         }
 
         private static void TrySetProperty(msBroadcastService.msBroadcastServiceClient client, uint clientId, uint handleId,
