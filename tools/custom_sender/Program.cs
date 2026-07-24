@@ -122,6 +122,17 @@ namespace XHeadSender
                                 DumpProperty(prop, 1);
                             }
 
+                            Console.WriteLine();
+                            Console.WriteLine("=== Flat Param.Values (raw, no tree) ===");
+                            foreach (var prop in newCh.Properties)
+                            {
+                                Console.WriteLine($"  [{prop.Property.Name}] {prop.Param.Values.Count} value(s):");
+                                foreach (var v in prop.Param.Values)
+                                {
+                                    Console.WriteLine($"    FieldID={v.FieldID} {DumpVariant(v)}");
+                                }
+                            }
+
                             var closeReq = new msRequest
                             {
                                 Cmd = msServiceCmd.CmdChannelClose,
@@ -130,6 +141,15 @@ namespace XHeadSender
                             };
                             var closeResp = client.sendRequest(closeReq, deadline: DateTime.UtcNow.AddSeconds(5));
                             Console.WriteLine($"  CmdChannelClose Result={closeResp.Result}");
+
+                            // CmdApplyConfig (sendRequest) returned "unhandled command : [5]", and
+                            // embedding Properties directly in CmdChannelOpen returned
+                            // "unknown property" (Properties at Open-time are scoped to the OUTPUT,
+                            // which has none). Reading xTaskStartChannel.cs / xHeadConfig.applyChannel
+                            // in the decompiled GUI shows the real flow: modulation/channel/codec/EPG
+                            // properties ride along with CmdChannelStart, not Open. Reproduce that:
+                            // Open -> ProgramAdd -> ProgramCommit -> ChannelStart(with Properties).
+                            RunChannelStartTest(client, msClient.HandleID, firstModulationOutputHandle);
                         }
                         else if (openResp.ParamCase == msResponse.ParamOneofCase.ErrMessage)
                         {
@@ -160,6 +180,119 @@ namespace XHeadSender
             finally
             {
                 channel.ShutdownAsync().Wait();
+            }
+        }
+
+        private static void RunChannelStartTest(msBroadcastService.msBroadcastServiceClient client, uint clientId, uint outputHandle)
+        {
+            Console.WriteLine();
+            Console.WriteLine("=== CmdChannelStart test (Constellation -> QPSK) ===");
+
+            var openReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdChannelOpen,
+                ClientID = clientId,
+                HandleID = outputHandle,
+                Channel = new msChannelParam { Name = "XHeadSenderStartTest" }
+            };
+            var openResp = client.sendRequest(openReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ChannelOpen: Result={openResp.Result} ParamCase={openResp.ParamCase}" +
+                (openResp.HasErrMessage ? $" ErrMessage={openResp.ErrMessage}" : ""));
+            if (openResp.ParamCase != msResponse.ParamOneofCase.Channel) return;
+            var ch = openResp.Channel;
+            uint chHandle = ch.HandleID;
+
+            var addReq = new msRequest { Cmd = msServiceCmd.CmdProgramAdd, ClientID = clientId, HandleID = chHandle };
+            var addResp = client.sendRequest(addReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramAdd: Result={addResp.Result} ParamCase={addResp.ParamCase}" +
+                (addResp.HasErrMessage ? $" ErrMessage={addResp.ErrMessage}" : ""));
+
+            int programIndex = 0;
+            if (addResp.ParamCase == msResponse.ParamOneofCase.Program)
+            {
+                programIndex = addResp.Program.Index;
+                var commitReq = new msRequest { Cmd = msServiceCmd.CmdProgramCommit, ClientID = clientId, HandleID = chHandle, Index = programIndex };
+                var commitResp = client.sendRequest(commitReq, deadline: DateTime.UtcNow.AddSeconds(5));
+                Console.WriteLine($"  ProgramCommit: Result={commitResp.Result}" +
+                    (commitResp.HasErrMessage ? $" ErrMessage={commitResp.ErrMessage}" : ""));
+            }
+
+            // Full field set for mModulationParam, mirroring mnPropertiesParam.enumFields():
+            // every leaf (Number/Select) field at its current/default value, Constellation changed.
+            var modProp = new msPropertyParam { Name = "mModulationParam" };
+            modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 0, UintVal = 473000 });   // Frequency
+            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 1, IntVal = 1 });          // DacCtrl.IFMode = Disable
+            modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 2, UintVal = 0 });        // DacCtrl.IFFreq
+            modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 3, UintVal = 0 });        // DacCtrl.GAIN
+            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 19, IntVal = 1 });         // Constellation: QAM64(3) -> QPSK(1)
+            modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 20, UintVal = 6 });       // Bandwidth
+            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 21, IntVal = 1 });         // FFT = 8k
+            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 22, IntVal = 3 });         // CodeRate = CR_5_6
+            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 23, IntVal = 1 });         // GuardInterval = GI_1_16
+            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 24, IntVal = 3 });         // TimeInterleavce = Mode3
+
+            var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
+            startReq.Properties.Add(modProp);
+            msResponse startResp;
+            try
+            {
+                startResp = client.sendRequest(startReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine($"  ChannelStart: Result={startResp.Result} Status={startResp.Status} ParamCase={startResp.ParamCase}" +
+                    (startResp.HasErrMessage ? $" ErrMessage={startResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  ChannelStart RPC error: {ex.Status}");
+                startResp = null;
+            }
+
+            if (startResp != null && startResp.Result == msResult.ResultSuccess)
+            {
+                Console.WriteLine("  Channel started. Waiting 3s before checking status / stopping...");
+                System.Threading.Thread.Sleep(3000);
+
+                var stopReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };
+                var stopResp = client.sendRequest(stopReq, deadline: DateTime.UtcNow.AddSeconds(5));
+                Console.WriteLine($"  ChannelStop: Result={stopResp.Result}");
+            }
+
+            var closeReq = new msRequest { Cmd = msServiceCmd.CmdChannelClose, ClientID = clientId, HandleID = chHandle };
+            var closeResp = client.sendRequest(closeReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ChannelClose: Result={closeResp.Result}");
+        }
+
+        private static void TrySetProperty(msBroadcastService.msBroadcastServiceClient client, uint clientId, uint handleId,
+            string propertyName, uint fieldId, msVariantType type, int intVal = 0, uint uintVal = 0, string strVal = null)
+        {
+            var variant = new msVariant { Type = type, FieldID = fieldId };
+            switch (type)
+            {
+                case msVariantType.VariantInt: variant.IntVal = intVal; break;
+                case msVariantType.VariantUint: variant.UintVal = uintVal; break;
+                case msVariantType.VariantString: variant.StrVal = strVal ?? ""; break;
+            }
+
+            var req = new msRequest
+            {
+                Cmd = msServiceCmd.CmdApplyConfig,
+                ClientID = clientId,
+                HandleID = handleId,
+            };
+            req.Properties.Add(new msPropertyParam
+            {
+                Name = propertyName,
+                Values = { variant }
+            });
+
+            try
+            {
+                var resp = client.sendRequest(req, deadline: DateTime.UtcNow.AddSeconds(5));
+                Console.WriteLine($"  Set {propertyName}.FieldID={fieldId} -> Result={resp.Result} Status={resp.Status} ParamCase={resp.ParamCase}" +
+                    (resp.HasErrMessage ? $" ErrMessage={resp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  Set {propertyName}.FieldID={fieldId} -> RPC error: {ex.Status}");
             }
         }
 
@@ -196,7 +329,7 @@ namespace XHeadSender
 
                 if (field.Range != null && field.Range.RangeGroup != null && field.Range.RangeGroup.StructDesc != null)
                 {
-                    DumpDescriptor(field.Range.RangeGroup.StructDesc, null, indent + 1);
+                    DumpDescriptor(field.Range.RangeGroup.StructDesc, param, indent + 1);
                 }
 
                 if (field.Range != null && field.Range.RangeValues != null)
@@ -206,7 +339,7 @@ namespace XHeadSender
                         if (rv.StructDesc != null)
                         {
                             Console.WriteLine($"{pad}  [when {field.Name}={rv.Name}]");
-                            DumpDescriptor(rv.StructDesc, null, indent + 2);
+                            DumpDescriptor(rv.StructDesc, param, indent + 2);
                         }
                     }
                 }

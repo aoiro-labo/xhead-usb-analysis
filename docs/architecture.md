@@ -154,5 +154,9 @@ XHEAD-2にはBML設定用の内蔵Webサーバー（`XHEAD-2_BML_WEB.pdf`参照�
       DVB_T2の完全なサブ構造体まで存在することが判明（変調チップは多規格対応の可能性が高い。
       ただし実際にISDB-T以外へ切替可能・安全かは別問題。同ファイルの注意事項を参照）
 - [ ] RTL-SDRループバックでの実信号検証（設定値と実際のRF出力の対応関係）
-- [ ] `tools/custom_sender` から実際に値をSet（`CmdApplyConfig`）する経路の検証・実装
-      （現状は読み取り/CmdChannelOpen-Closeの往復のみ確認済み）
+- [x] Set経路の調査 → `CmdApplyConfig`は未実装(`unhandled command`)。正解は
+      `CmdChannelStart`にPropertiesを同梱する方式（`docs/protocol/modulation_capabilities.md`
+      「Set経路の調査結果」参照）。ただしSource/Contentを繋がずにStartを呼ぶと
+      `mnservice.exe`がクラッシュすることを確認済み（実機には無害）。
+- [ ] Source(内蔵Colorbar等)を正しくアタッチした上での`CmdChannelStart`成功ケースの実装
+      （`msSourceParam`/`CmdSourceOpen`/`CmdProgramAdd`+`msMediaContent`の配線が必要、次のステップ）

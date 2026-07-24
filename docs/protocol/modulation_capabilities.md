@@ -64,6 +64,42 @@ XHEAD-USBの出力オブジェクト: `ObjectType=ObjectOutputModulation`, `Path
   ダンプ機能と思われる）。
 - `mEPGSimpleParam`: EPGモード（`AribSchedule_8Days`等）、ジャンルコード等。
 
+## Set経路の調査結果 (2026-07-24)
+
+変調パラメータを実際に変更するための正しい手順を実機検証した。
+
+### 試した経路と結果
+
+1. **`CmdApplyConfig`** (単独の`sendRequest`) → `UNAVAILABLE: unhandled command : [5]`。
+   このサーバービルドでは未実装。`docs/protocol/README.md`のworked exampleが想定していた
+   経路は実際には機能しない。
+2. **`CmdChannelOpen`にPropertiesを同梱** → `UNAVAILABLE: unknown property : [mModulationParam]`。
+   Open時点でのProperties検証はOUTPUTオブジェクト基準（`msClient.Outputs[].Properties`は
+   常に空）であり、チャンネル固有のプロパティ名はまだ「知らない」状態のため拒否される。
+3. **`CmdChannelStart`にPropertiesを同梱**（正解） → デコンパイル済みGUIコード
+   (`xTaskStartChannel.cs` → `xHeadConfig.applyChannel()` → `mnClient.Channel.startChannel(channel, props)`)
+   を追ったところ、変調・チャンネル・コーデック・EPGのプロパティは**`CmdChannelStart`にこそ
+   同梱される**設計と判明。`CmdChannelOpen`(素の名前のみ) → `CmdProgramAdd` → `CmdProgramCommit`
+   まではResultSuccessで進行することを確認。
+
+### 既知のクラッシュ再現条件（重要・要注意）
+
+`CmdSourceOpen`等で実際の映像/音声ソースを一切アタッチしないまま`CmdChannelStart`を呼ぶと、
+**`mnservice.exe`がネイティブ側で異常終了する**ことを確認した(2026-07-24, ログ:
+`captures/mnservice_stdout2.log`, ローカル専用)。`CmdChannelOpen`→`CmdProgramAdd`→
+`CmdProgramCommit`まではすべて`ResultSuccess`で応答が返るが、その直後の`CmdChannelStart`で
+gRPC接続そのものが切断され(`Stream removed`)、プロセスが完全に終了する。
+
+- 実機・USBデバイス自体への実害は無いことを確認済み（クラッシュ後にサービスを再起動すれば
+  即座に実機を再検出し正常応答する）。ソフトウェアだけがクラッシュする。
+- 原因はおそらく、`xTaskStartChannel.cs`が本来 `createSource()` → `createContent()` →
+  `applyContent()` を経てチャンネルにコンテンツをアタッチしてから`startChannel()`を呼ぶ設計で
+  あるところ、このテストではSource/Content工程を省略してChannelStartだけを呼んだため、
+  ネイティブ側がnullな参照にアクセスした（未処理例外/アクセス違反）と推測される。
+- **今後Startを試す際は、必ず先にSource(例: Colorbarテストパターン等の内蔵信号源)を
+  `CmdSourceOpen`→`CmdSourceStart`し、`CmdProgramAdd`後に`msMediaContent`経由でstreamを
+  結びつけてから`CmdChannelStart`を呼ぶこと。** 詳細な手順は未実装（次のステップ）。
+
 ## 取得方法（再現手順）
 
 ```
