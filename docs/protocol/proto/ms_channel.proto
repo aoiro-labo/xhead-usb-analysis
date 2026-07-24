@@ -1,0 +1,41 @@
+// Reconstructed from XHEAD-STUDIO decompiled client (ilspycmd). Schema only, no vendor implementation code.
+syntax = "proto3";
+
+// ms_channel.proto — broadcast-channel objects: the pipeline that feeds
+// one or more msProgram (services/streams) into an output. msObjectType
+// (ms_base.proto) enumerates channel backends, notably
+// ObjectChannelXHEAD (33562640) — the real XHEAD-USB hardware transport
+// stream output — alongside software-only ObjectChannelTransform /
+// ObjectChannelCodec / ObjectChannelFile / ObjectChannelProgram variants,
+// which suggests this same generic broadcast-pipeline framework is shared
+// across other (non-XHEAD) Micomsoft products.
+//
+// NOTE: msChannelParam below is intentionally tiny (just a Name) — it is
+// the *request* payload for CmdChannelOpen (msRequest.Channel), used only
+// to name/select a channel to create. The full live channel object with
+// status/content/properties is msChannel, returned in msResponse.Channel
+// and msEvent.Channel.
+
+import "ms_base.proto";
+import "ms_property.proto";
+
+message msChannel {
+  uint32 HandleID = 1;
+  uint32 ObjectID = 2;
+  uint32 OutputID = 3;
+  string Name = 4;
+  msObjectType ObjectType = 5;
+  msStatus Status = 6;
+  msContent Content = 7;
+  repeated msProperty Properties = 8;
+}
+
+message msChannelParam {
+  string Name = 1;
+}
+
+message msProgram {
+  int32 Index = 1;
+  uint32 ObjectID = 2;
+  repeated msProperty Properties = 3;
+}

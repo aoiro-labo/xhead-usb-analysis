@@ -71,19 +71,65 @@ public bool EnableDebugMode { get; set; }   // xSystemParam.cs:75, デフォル�
 
 `EnableBML` は BML (ARIB Broadcast Markup Language、データ放送)ファイルのインポート機能 (`uiBML.cs`, `formBML.cs`) に関連。データ放送コンテンツを持たせられる可能性がある。
 
-## 4. gRPCプロパティシステム
+## 4. gRPCプロトコルの完全な再構成 (docs/protocol/)
 
-設定値は固定メッセージではなく、`mnDescriptor` / `mnField` / `msProperty*` による**汎用プロパティツリー**として表現され、ドット区切りのパス文字列（例: `mModulationParam.Mode.ISDB_T.Constellation`）でGUIとサービス間をやり取りしている（`xHeadConfig.cs` の `MODULATION_FREQ` 等の定数群、`getChnnelProperty()` を参照）。
+`decompiled/mnClientDotNet/mnFramework.grpc/Ms*Reflection.cs` の各ファイルには、Micomsoftの元
+`.proto` を `protoc` がコンパイルした際の **`FileDescriptorProto` そのもの** がbase64で埋め込まれて
+いることが判明した。これをPythonの `google.protobuf` で直接デコードすることで、フィールド名・
+フィールド番号・型・oneof・enum値をIL推測ではなく **バイト単位で正確に** 復元できた。
 
-この設計は、**GUIが参照していないパスがサービス側に存在する可能性**を示唆する。サービスが公開する全プロパティツリーを列挙できれば、公式アプリのどのUIモードにも出てこない設定（真の意味で自由度が最も高い層）を発見できる可能性がある。次のステップ候補:
+結果は [`docs/protocol/`](protocol/) 以下に、DLL不要で再実装可能なレベルの `.proto` 群
+(`docs/protocol/proto/`) と解説 (`docs/protocol/README.md`) としてまとめてある。要点:
 
-- gRPC reflection (もし有効なら `grpcurl` で列挙可能)
-- `mnClientDotNet.dll` を直接参照した自作クライアントで `msDescriptor` を辿るツリー探索
+- 設定値は固定メッセージではなく、`msProperty` (`msDescriptor`=形, `msPropertyParam`=値) による
+  **汎用プロパティツリー**として表現される。`msDescriptor` は実質的に `mnservice.exe` 内部の
+  ネイティブC構造体のランタイム反映（`Offset`/`Size`/`Tag` を持つ）で、GUIのコード上に見える
+  `mModulationParam.Mode.ISDB_T.Constellation` のようなドット区切りパスは、実際にはネストした
+  `msDescriptor` グループとして配線されている。
+- **クライアントはコンパイル時に「変調パラメータ」の型を一切持つ必要がない**。`connectService`
+  で返る `msClient.Outputs` 等を辿れば、実行時にフィールド名・ID・型・許容値レンジ
+  (`msPropertyRange`) をすべて発見でき、公式GUIのSimple/Advance/Debugいずれのモードにも
+  出てこないフィールドも含めて到達可能（詳細は `docs/protocol/README.md` §5）。
+- **重要: RFパラメータの範囲はワイヤレベルで強制されていない。** `msPropertyRange` の
+  Min/Max/選択肢はサーバーが「公開している」メタデータに過ぎず、プロトコル自体には
+  範囲外の値の送信を防ぐ仕組みがない。`mnservice.exe`側で実際にバリデーションしているかは
+  このクライアント側スキーマだけでは検証不能（ネイティブ解析が必要）。XHEAD-USBはUHF帯の
+  RF送信機であるため、自作ツールでこの層を扱う際は既定で公式GUIと同じ安全な範囲に収め、
+  範囲外の値を送る場合は利用者の明示的な意思確認を挟むこと。
+- ファームウェア書き換えも同じローカルgRPC面 (`sendControl` + `msControlParam` +
+  `msFirmwareFile`/`msFWUsbConfig`) に載っており、アクセス制御は接続時に自己申告する
+  `msPrivilege` のみ（暗号的な認証は無し。localhost限定であることが前提の設計と見られる）。
 
-## 5. 未解析・要調査
+## 5. USBドライバ問題（発見・解決済み）
+
+2026-07-24、実機接続時に公式アプリが `XHEAD-USBの接続に失敗しました` エラーを表示する事象を確認。
+原因はUSBドライバが標準の **WinUSB** ではなく **libusbK** (v3.1.0.0, `oem122.inf`) になっていたこと
+（`C:\sdrsharp-x86\zadig.exe` でRTL-SDR用ドライバを導入した際に誤って変更してしまったと推測）。
+デバイスマネージャーでドライバを削除しUSB再接続することでWinUSBへ自動的に再バインドされ、
+公式アプリ・自作ツール (`tools/custom_sender`) ともに `mnservice.exe` への接続に成功することを確認。
+
+`mnservice.exe`はTCP `50051`(gRPC)以外のポートは待受けていないことを確認済み（`Get-NetTCPConnection`）。
+XHEAD-2にはBML設定用の内蔵Webサーバー（`XHEAD-2_BML_WEB.pdf`参照。放送設定/EPG設定/データ放送設定/
+ネットワーク設定/著作権保護設定などのページを持つ本格的な管理画面）があるが、これはXHEAD-2がLAN/Wi-Fi
+接続を持つ据置機であるためと考えられ、PC直結ドングルのXHEAD-USBには同等のWeb UIは存在しない
+（gRPCが唯一の制御面）。
+
+なお、WinUSB復元後に確認した限りでは、XHEAD-USBはUSBマスストレージクラスとしては列挙されない
+（後述のXHEAD-2向けBMLマニュアルにあるような `UPDATE`/`data`/`www` フォルダを持つ仮想ドライブ
+機能は見当たらない）。BML(データ放送)機能はXHEAD-USBでは gRPC経由・GUIの `EnableBML` フラグ
+配下 (`uiBML.cs`) に統合されており、XHEAD-2の「USBドライブにtsファイルをドラッグ&ドロップ」
+方式とは別の実装に置き換わっていると考えられる。
+
+## 6. 未解析・要調査
 
 - [ ] `mnservice.exe` 本体のネイティブ解析（USB生プロトコル、Ghidra/IDA向き）
-- [ ] libusbK 経由でのUSB通信を Wireshark + USBPcap で実キャプチャ
-- [ ] gRPC reflection の有効性確認（`grpcurl -plaintext localhost:50051 list`）
-- [ ] Debugモード解放の実機確認（GUI上でタブ/項目が増えるか）
+- [ ] libusbK 経由でのUSB通信を Wireshark + USBPcap で実キャプチャ（現在はWinUSBに復元済みのため、
+      比較のため意図的にlibusbKへ切り替えて観測するか要検討）
+- [x] gRPC reflection の有効性確認 → reflectionではなく `Ms*Reflection.cs` 埋め込みの
+      `FileDescriptorProto` から確定情報を取得済み（`docs/protocol/`）
+- [x] Debugモード解放の実機確認 → 実機接続自体はドライバ問題で一旦ブロックされていたが解消。
+      GUI上でのDebugタブの見た目確認は次のステップ
 - [ ] RTL-SDRループバックでの実信号検証（設定値と実際のRF出力の対応関係）
+- [ ] `tools/custom_sender` から実際に `msClient.Outputs`/`Properties` を列挙し、
+      変調パラメータの実際の `FieldID`/`msPropertyRange` を確定させる（`docs/protocol/README.md`
+      の worked example はプレースホルダ値であり、実接続での裏取りが必要）

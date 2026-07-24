@@ -1,0 +1,88 @@
+// Reconstructed from XHEAD-STUDIO decompiled client (ilspycmd). Schema only, no vendor implementation code.
+syntax = "proto3";
+
+// ms_source.proto — media source objects that feed content into a channel:
+// network/local URL, capture pass-through, transcode (with built-in
+// colorbar test pattern and sine-tone test audio generators), or resample.
+
+import "ms_base.proto";
+import "ms_property.proto";
+
+enum msURLMode {
+  UrlAuto = 0;
+  Local = 1;
+  Network = 2;
+}
+
+enum msURLFunction {
+  URL_NONE = 0;
+  URL_AUTO_REPEAT = 1;
+  URL_SELECT_HIGH_RESOLUTION = 2;
+}
+
+enum msSourceMode {
+  SourceURL = 0;
+  SourceCapture = 1;
+  SourceTranscode = 2;
+  SourceResample = 3;
+}
+
+message msURLParam {
+  string Url = 1;
+  msURLMode Mode = 2;
+  uint32 Functions = 3;
+  uint32 QueueTime = 4;
+  uint32 Timeout = 5;
+}
+
+message msCaptureParam {
+  repeated Capture Content = 1;
+  message Capture {
+    uint32 HandleID = 11;
+    uint32 ProgramID = 12;
+    int32 StreamIndex = 13;
+  }
+}
+
+message msTranscodeParam {
+  uint32 Engine = 1;
+  msColorbarMode Colorbar = 2;
+  uint32 QueueTime = 3;
+  msVideo Video = 4;
+  uint32 VideoBitrate = 5;
+  uint32 AudioCount = 6;
+  msSineToneMode SineTone = 7;
+  msAudio Audio = 8;
+  uint32 AudioBitrate = 9;
+}
+
+message msResampleParam {
+  msColorbarMode Colorbar = 1;
+  msVideo Video = 2;
+  uint32 AudioCount = 3;
+  msSineToneMode SineTone = 4;
+  msAudio Audio = 5;
+}
+
+message msSourceParam {
+  msSourceMode Mode = 1;
+  string Name = 2;
+  oneof Param {
+    msURLParam URL = 10;
+    // field 11: unused/removed in original schema
+    msCaptureParam Capture = 12;
+    msTranscodeParam Transcode = 13;
+    msResampleParam Resample = 14;
+  }
+}
+
+message msSource {
+  uint32 HandleID = 1;
+  uint32 ObjectID = 2;
+  msObjectType ObjectType = 3;
+  msStatus Status = 4;
+  msSourceMode Mode = 5;
+  string Name = 6;
+  msContent Content = 7;
+  repeated msProperty Properties = 8;
+}

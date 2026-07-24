@@ -1,0 +1,47 @@
+// Reconstructed from XHEAD-STUDIO decompiled client (ilspycmd). Schema only, no vendor implementation code.
+syntax = "proto3";
+
+// ms_engine.proto — media (codec) engine objects: what a given engine can
+// do (msCapacity: video/audio encode or decode, with supported codecs,
+// sample rates, bit rates, channel layouts) plus its live property tree.
+
+import "ms_base.proto";
+import "ms_property.proto";
+
+enum msCapacityType {
+  None = 0;
+  VideoEncode = 1;
+  VideoDecode = 2;
+  AudioEncode = 3;
+  AudioDecode = 4;
+}
+
+message msVideoCapacity {
+  msVideoCodec Codec = 1;
+  uint32 Performance = 2;
+}
+
+message msAudioCapacity {
+  msAudioCodec Codec = 1;
+  repeated uint32 SampleRate = 2;
+  repeated uint32 BitRate = 3;
+  repeated msAudioChannel Channel = 4;
+}
+
+message msCapacity {
+  msCapacityType Type = 1;
+  oneof Param {
+    msVideoCapacity Video = 10;
+    msAudioCapacity Audio = 11;
+  }
+}
+
+message msEngine {
+  uint32 HandleID = 1;
+  uint32 ObjectID = 2;
+  msObjectType ObjectType = 3;
+  string Name = 4;
+  string Desc = 5;
+  repeated msProperty Properties = 6;
+  repeated msCapacity Capacities = 7;
+}

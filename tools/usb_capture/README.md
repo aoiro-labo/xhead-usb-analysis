@@ -9,16 +9,22 @@ gRPC (`docs/protocol/`) はあくまで **PC内の GUI⇔サービス間** の�
 ## 現状の環境
 
 - 実機は `VID_17A7&PID_0008` として認識。
-- ドライバクラスが **libusbk devices** になっている（2026-07-24時点で確認）。
-  標準のベンダードライバではなく libusbK に置き換わっている状態で、`C:\sdrsharp-x86\zadig.exe`
-  がこのマシンに存在する（RTL-SDR用ドライバ導入時にZadigで意図せずXHEAD-USBの方の
-  ドライバも差し替えてしまった可能性がある）。
-  - **要確認**: 現在のドライバ状態で公式アプリ (`xhead_studio.exe` → `mnservice.exe`)
-    が正常に実機を認識・送出できるか。もし認識できない場合、解析目的で意図的に
-    libusbK/WinUSBへ差し替えたあと元のベンダードライバへ戻す必要があるかもしれない。
-  - デバイスマネージャーで `XHEAD-USB` のドライバの詳細（`.inf`/プロバイダー名）を確認し、
-    必要なら「ドライバーを元に戻す」または公式インストーラの再実行でベンダードライバに
-    復元できるか確認する。
+- **確認済み(2026-07-24)**: ドライバクラスが **libusbk devices** (provider libusbK, v3.1.0.0,
+  `oem122.inf`) になっており、公式アプリはこの状態で実機接続に失敗する
+  （`XHEAD Studio: XHEAD-USBの接続に失敗しました。` ダイアログ）。
+  - デバイスの `CompatibleID` に `USB\MS_COMP_WINUSB` が含まれており、これはデバイス
+    ファームウェア自身がMS OS Descriptor経由のWinUSB自動バインドに対応していることを示す。
+    つまり本来のドライバは **WinUSB**（Microsoft純正・署名済み）であり、専用ベンダードライバ
+    ではないと推定される。
+  - `C:\sdrsharp-x86\zadig.exe` がこのマシンに存在しており、RTL-SDR用ドライバ導入時に
+    誤ってXHEAD-USBの方のドライバもlibusbKへ差し替えてしまったと推測される。
+  - **対処法**: デバイスマネージャーでドライバを削除→USB抜き差しで再列挙させ、WinUSBへの
+    自動バインドを待つ。または Zadig で明示的に XHEAD-USB → WinUSB を選んで
+    "Replace Driver" する（RTL-SDR側のデバイスと誤選択しないよう要注意）。
+  - `mnservice.exe` は gRPC (localhost:50051) 自体は正常に待受けており、この問題は
+    純粋に `mnservice.exe` ⇔ 実機のUSBオープンの失敗（WinUSB API呼び出し失敗）と考えられる。
+    自作ツール (`tools/custom_sender`) で `connectService` した際も
+    `Status=StatusOffline` が返り、実機非接続状態と整合する。
 - Wireshark + USBPcap はインストール済み (`C:\Program Files\Wireshark`, `C:\Program Files\USBPcap`)。
 
 ## キャプチャ手順（案）

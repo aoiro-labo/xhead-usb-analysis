@@ -1,6 +1,9 @@
 # 公式アプリのデコンパイル済みソースは著作権上リポジトリに含めない（ローカル参照のみ）
 /decompiled/
 
+# マイコンソフト提供の資料PDF類（著作権上リポジトリに含めない。ローカル参照のみ）
+*.pdf
+
 # 実キャプチャデータ（大容量・生データ）。厳選したサンプルのみ docs/samples 等で個別管理する
 /captures/*
 !/captures/.gitkeep
@@ -21,3 +24,6 @@ venv/
 # OS
 Thumbs.db
 .DS_Store
+
+# Claude Code ローカル作業用ファイル
+.claude/

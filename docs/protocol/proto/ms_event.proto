@@ -1,0 +1,84 @@
+// Reconstructed from XHEAD-STUDIO decompiled client (ilspycmd). Schema only, no vendor implementation code.
+syntax = "proto3";
+
+// ms_event.proto — the server-push event envelope. msEvent is what arrives
+// on the streams returned by subscribeService and sendControl; msEventID
+// (below) requires `allow_alias` because EventServiceStart and
+// EventServicePing are literally the same wire value (0) — see
+// ../README.md for the full msEventID -> msEvent.Param pairing table.
+
+import "ms_base.proto";
+import "ms_property.proto";
+import "ms_output.proto";
+import "ms_capture.proto";
+import "ms_engine.proto";
+import "ms_channel.proto";
+import "ms_source.proto";
+
+enum msEventID {
+  option allow_alias = true;
+  EventServiceStart = 0;
+  EventServicePing = 0;
+  EventServiceTerminal = 256;
+  EventStorageAdd = 512;
+  EventStorageDel = 513;
+  EventControlProgress = 1024;
+  EventControlFirmware = 1025;
+  EventControlParam = 1026;
+  EventControlResult = 1027;
+  EventOutputAdd = 4100;
+  EventOutputDel = 4101;
+  EventCaptureAdd = 4200;
+  EventCaptureDel = 4201;
+  EventChannelStatus = 8192;
+  EventChannelStart = 8201;
+  EventChannelPerformance = 8202;
+  EventChannelFailEncode = 8203;
+  EventChannelMediaActivate = 8281;
+  EventChannelMediaDeactivate = 8282;
+  EventSourceStatus = 16384;
+  EventSourceMediaActive = 16385;
+  EventSourceMediaDeactive = 16386;
+  EventCaptureStatus = 32768;
+  EventCaptureUpdate = 32769;
+  EventDebug = 65536;
+}
+
+message msEventStatus {
+  msStatus Status = 1;
+  oneof Param {
+    msContent Content = 10;
+  }
+}
+
+message msEventUpdate {
+  msStatus Status = 1;
+  repeated msProperty Properties = 2;
+}
+
+message msEventResult {
+  msResult Code = 1;
+  string Message = 2;
+}
+
+message msEvent {
+  msEventID ID = 1;
+  uint32 HandleID = 2;
+  oneof Param {
+    string Message = 50;
+    msEventStatus Status = 51;
+    msOutput Output = 52;
+    msCapture Capture = 53;
+    msChannel Channel = 54;
+    msEngine Engine = 55;
+    msSource Source = 56;
+    uint32 ProgramID = 57;
+    msEventUpdate Update = 58;
+    bytes Profiler = 59;
+    int32 Progress = 60;
+    msControlParam Control = 61;
+    msFirmwareFile Firmware = 62;
+    msEventResult Result = 63;
+    msStoragePath Path = 64;
+  }
+}

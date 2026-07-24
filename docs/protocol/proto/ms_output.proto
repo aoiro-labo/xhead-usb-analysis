@@ -1,0 +1,26 @@
+// Reconstructed from XHEAD-STUDIO decompiled client (ilspycmd). Schema only, no vendor implementation code.
+syntax = "proto3";
+
+// ms_output.proto — output-device objects. msObjectType distinguishes at
+// least two output kinds: ObjectOutputModulation (134221824 = the RF/OFDM
+// modulator itself — this IS the XHEAD-USB hardware) and ObjectOutputIO
+// (134225920, a generic I/O output). There is no dedicated
+// "msModulationParam" message anywhere in the client: ISDB-T modulation
+// fields (Channel/PowerLevel/Constellation/CodeRate/GuardInterval/FFT/
+// TimeInterleave/Frequency) are exposed exclusively through
+// msOutput.Properties (the generic property system, see ms_property.proto
+// and ../README.md).
+
+import "ms_base.proto";
+import "ms_property.proto";
+
+message msOutput {
+  uint32 HandleID = 1;
+  uint32 ObjectID = 2;
+  msObjectType ObjectType = 3;
+  // field 4: unused/removed in original schema
+  string Name = 5;
+  string Path = 6;
+  uint32 Version = 7;
+  repeated msProperty Properties = 8;
+}

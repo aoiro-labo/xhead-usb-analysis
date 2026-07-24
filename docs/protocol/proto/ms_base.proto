@@ -1,0 +1,312 @@
+// Reconstructed from XHEAD-STUDIO decompiled client (ilspycmd). Schema only, no vendor implementation code.
+syntax = "proto3";
+
+// ms_base.proto — shared/common types used by nearly every other file:
+// audio/video format descriptors, the generic "msContent" program/stream
+// tree, control-command params, firmware-file metadata, storage-path tree,
+// and host system info. No `package` is declared — see ../README.md
+// ("Wire compatibility notes") for why that matters if you regenerate code
+// from these files.
+
+enum msStatus {
+  StatusOffline = 0;
+  StatusIdle = 1;
+  StatusPrepare = 2;
+  StatusReady = 3;
+  StatusRunning = 4;
+  StatusEOF = 5;
+  StatusStop = 6;
+  StatusFailUnknown = 32768;
+  StatusFailFormat = 32769;
+  StatusFailDevice = 32770;
+  StatusFailTimeout = 32771;
+}
+
+enum msResult {
+  option allow_alias = true;
+  ResultSuccess = 0;
+  ResultFail = 32768;
+  ResultFailUnknown = 32768;
+  ResultFailParam = 32769;
+  ResultFailClient = 32770;
+  ResultFailUnSupported = 32771;
+  ResultFailPrivilege = 32772;
+  ResultFailExists = 32773;
+  ResultFailNotExists = 32774;
+  ResultFailStatus = 32775;
+}
+
+enum msObjectType {
+  ObjectTypeNone = 0;
+  ObjectSourceURL = 16781312;
+  ObjectSourceCapture = 16785408;
+  ObjectSourceTranscode = 16793600;
+  ObjectSourceResample = 16809984;
+  ObjectChannelTransform = 33558528;
+  ObjectChannelCodec = 33562624;
+  ObjectChannelXHEAD = 33562640;
+  ObjectChannelFile = 33562656;
+  ObjectChannelProgram = 33570816;
+  ObjectCaptureFrame = 67112960;
+  ObjectCapturePacket = 67117056;
+  ObjectOutputModulation = 134221824;
+  ObjectOutputIO = 134225920;
+  ObjectMediaEngine = 268439552;
+}
+
+enum msCaptureType {
+  CaptureNone = 0;
+  FrameVideoFlag = 256;
+  FrameAudioFlag = 512;
+  FrameStreamFlag = 1024;
+  CaptureInput = 4096;
+  CaptureOutput = 8192;
+  WinDDShowFlag = 65536;
+  CaptureWin = 16777216;
+  CaptureDDShow = 16842752;
+  DDShowVideo = 16843008;
+  DDShowAudio = 16843264;
+  DDShowAudioVideo = 16843520;
+  DDShowStream = 16843776;
+  CaptureWinDXGI = 16908288;
+  DXGIDesktop = 16908544;
+  CaptureWinCoreAudio = 17039360;
+  CoreAudioCapture = 17043968;
+  CoreAudioRender = 17048064;
+  CaptureLinuxV4l2 = 33619968;
+  V4L2Video = 33620224;
+  V4L2Audio = 33620480;
+  V4L2AudioVideo = 33620736;
+  V4L2Stream = 33620996;
+  CaptureFFmpeg = 67174400;
+  FFmpegColorbar = 67175168;
+}
+
+enum msMediaType {
+  MediaVideo = 0;
+  MediaAudio = 1;
+  MediaData = 2;
+}
+
+enum msAudioCodec {
+  MP1_L2 = 0;
+  AAC_LC_ADTS = 1;
+  AAC_LC_LATM = 2;
+  AC3_A52 = 3;
+  PCM_S16 = 4096;
+  PCM_S16P = 4097;
+  PCM_FLT = 4098;
+  PCM_FLTP = 4099;
+}
+
+enum msAudioChannel {
+  Mono = 0;
+  Stereo = 1;
+  StereoMono = 2;
+  Channel_2_1 = 3;
+  Channel_5_1 = 4;
+}
+
+enum msVideoCodec {
+  MPEG2VIDEO = 0;
+  H264 = 1;
+  HEVC = 2;
+  MJPEG = 3;
+  RAW_RGB = 4096;
+  RAW_RGBA = 4097;
+  RAW_NV12 = 4098;
+  RAW_YUYV_422 = 4099;
+  RAW_YUV_420P = 4100;
+  RAW_YUV_422P = 4101;
+}
+
+enum msFrameRate {
+  FPS_23_97 = 0;
+  FPS_24 = 1;
+  FPS_25 = 2;
+  FPS_29_97 = 3;
+  FPS_30 = 4;
+  FPS_50 = 5;
+  FPS_59_94 = 6;
+  FPS_60 = 7;
+  FPS_AUTO = 4096;
+}
+
+enum msFrameStructure {
+  option allow_alias = true;
+  Progressive = 0;
+  Interlaced = 1;
+  FieldTopBottom = 1;
+  FieldBottomTop = 2;
+}
+
+enum msColorbarMode {
+  ColorbarTestsrc2 = 0;
+  ColorbarSmptebars = 1;
+  ColorbarSmptehdbars = 2;
+  ColorbarPal75bars = 3;
+  ColorbarPal100bars = 4;
+  ColorbarBlack = 5;
+}
+
+enum msSineToneMode {
+  SineToneMute = 0;
+  SineToneBeep = 1;
+  SineToneNoBeep = 2;
+}
+
+enum msMediaFunction {
+  MEDIA_NONE = 0;
+  MEDIA_PADDING_SILENCE = 1;
+  MEDIA_CONTENT_PROTECTED = 2;
+}
+
+enum msControlParamType {
+  ControlParamNone = 0;
+  ControlParamInt = 1;
+  ControlParamUInt = 2;
+  ControlParamString = 3;
+  ControlParamBuffer = 4;
+}
+
+enum msFirmwareMode {
+  FWNone = 0;
+  FWTransform = 1;
+  FWBroadcast = 2;
+}
+
+enum msStorageType {
+  File = 0;
+  Directory = 1;
+}
+
+enum msStorageAccess {
+  AccessNone = 0;
+  AccessRead = 1;
+  AccessWrite = 2;
+  AccessReadWrite = 3;
+}
+
+message msAudio {
+  msAudioCodec Codec = 1;
+  int32 SampleRate = 2;
+  msAudioChannel Channel = 3;
+}
+
+message msVideo {
+  msVideoCodec Codec = 1;
+  int32 Width = 2;
+  int32 Height = 3;
+  msFrameStructure FrameStruct = 4;
+  msFrameRate FrameRate = 5;
+}
+
+message msFormat {
+  msMediaType Type = 1;
+  oneof Param {
+    msVideo Video = 10;
+    msAudio Audio = 11;
+  }
+}
+
+message msEncodeParam {
+  msMediaType Type = 1;
+  uint32 Bitrate = 2;
+  oneof Param {
+    msVideo Video = 10;
+    msAudio Audio = 11;
+  }
+}
+
+message msContent {
+  repeated Program Programs = 1;
+  message Stream {
+    int32 Index = 10;
+    int32 ID = 11;
+    msFormat Format = 12;
+  }
+  message Program {
+    uint32 ID = 20;
+    repeated Stream Streams = 21;
+  }
+}
+
+message msMediaParam {
+  msMediaFunction Functions = 1;
+}
+
+message msMediaContent {
+  int32 Index = 1;
+  msMediaParam Param = 2;
+  uint32 SourceID = 3;
+  uint32 ProgramID = 4;
+  uint32 EngineID = 5;
+  repeated Stream Streams = 6;
+  enum NodeMode {
+    NodePassthrough = 0;
+    NodeTranscode = 1;
+  }
+  message Node {
+    NodeMode Mode = 20;
+    oneof Param {
+      msEncodeParam Encode = 21;
+      msFormat Format = 22;
+    }
+  }
+  message Stream {
+    int32 index = 30;
+    repeated Node Nodes = 31;
+  }
+}
+
+message msControlParam {
+  uint32 Command = 1;
+  msControlParamType Type = 2;
+  oneof Param {
+    string strParam = 10;
+    uint32 UintParam = 11;
+    int32 IntParam = 12;
+    bytes BufParam = 13;
+  }
+}
+
+message msFWUsbConfig {
+  uint32 VID = 1;
+  uint32 PID = 2;
+  string Desc = 3;
+}
+
+message msFirmwareFile {
+  uint32 MajorVersion = 1;
+  uint32 MinorVersion = 2;
+  msFirmwareMode Mode = 3;
+  oneof Param {
+    msFWUsbConfig USB = 10;
+  }
+}
+
+message msStoragePath {
+  uint32 ID = 1;
+  msStorageType Type = 2;
+  msStorageAccess Access = 3;
+  string Name = 4;
+  repeated msStoragePath Nodes = 5;
+}
+
+message msStorage {
+  string Tag = 1;
+  string Backslash = 2;
+  repeated msStoragePath Nodes = 3;
+}
+
+message msSystem {
+  string Platform = 1;
+  uint32 Version = 2;
+  string CPU = 3;
+  int32 Numbers = 4;
+  // field 5: unused/removed in original schema
+  uint32 TotalMemory = 6;
+  // field 7: unused/removed in original schema
+  uint32 OSMajor = 8;
+  uint32 OSMinor = 9;
+}

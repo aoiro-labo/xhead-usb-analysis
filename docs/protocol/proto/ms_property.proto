@@ -1,0 +1,215 @@
+// Reconstructed from XHEAD-STUDIO decompiled client (ilspycmd). Schema only, no vendor implementation code.
+syntax = "proto3";
+
+// ms_property.proto — the generic, self-describing property/descriptor/
+// range/variant system. This is the mechanism mnservice.exe uses to expose
+// *every* configurable parameter on every object (source/channel/engine/
+// capture/output), including ISDB-T modulation settings, WITHOUT a
+// dedicated protobuf message per parameter. See ../README.md
+// ("The generic property system") for the full plain-English walkthrough
+// and a worked ISDB-T modulation example. Short version:
+//
+//   msDescriptor      = a named "struct layout" (like a C struct type):
+//                        Name + Size (bytes) + an ordered list of
+//                        msPropertyField entries. Descriptors can nest
+//                        (a field of FieldGroup type points at a child
+//                        msDescriptor via msPropertyRange.RangeGroup).
+//   msPropertyField   = one field within that struct layout: Name, its
+//                        msFieldType (number/select/flags/string/buffer/
+//                        group/list/const-select), byte Offset + Size
+//                        (this really does mirror a native C struct's
+//                        memory layout — Offset/Size/Tag are struct
+//                        marshaling metadata, not just documentation),
+//                        an optional legal-value msPropertyRange, and a
+//                        numeric FieldID used to address the field's
+//                        *value* independently of its *shape*.
+//   msPropertyRange   = the legal-value constraint for one field: which
+//                        oneof variant (RangeInt/RangeUint/RangeValues/
+//                        RangeString/RangeBuffer/RangeGroup) applies, each
+//                        carrying its own Min/Max/Default (or enumerated
+//                        Values, or nested StructDesc for groups).
+//                        IMPORTANT: this is advisory metadata the server
+//                        *publishes* — nothing in the wire format stops a
+//                        client from sending a msVariant outside the
+//                        declared range; enforcement is whatever
+//                        mnservice.exe does internally (unverified).
+//   msVariant         = one concrete typed value: a msVariantType tag +
+//                        FieldID (which msPropertyField it answers) + a
+//                        oneof holding the actual int/uint/string/bytes.
+//   msProperty        = the pairing of a msDescriptor (the "shape": what
+//                        fields exist) with a msPropertyParam (the
+//                        "values": a Name identifying the property/path,
+//                        e.g. an object's property-tree root, plus the
+//                        list of msVariant values for that struct's
+//                        fields).
+//   msPropertyParam   = Name + repeated msVariant Values — this is what
+//                        actually rides inside msRequest.Properties /
+//                        msEvent.Update.Properties to GET or SET values.
+//
+// msConfigFile is a related but separate tree used for the on-disk /
+// session-wide configuration document (sections/values/arrays/groups),
+// built from the same msVariant/msPropertyRange/msProperty primitives.
+
+enum msFieldType {
+  FieldNumber = 0;
+  FieldSelect = 1;
+  FieldFlags = 2;
+  FieldString = 3;
+  FieldBuffer = 4;
+  FieldGroup = 5;
+  FieldConstSelect = 6;
+  FieldList = 7;
+}
+
+enum msRangeType {
+  RangeInt = 0;
+  RangeUint = 1;
+  RangeSelect = 2;
+  RangeFlags = 3;
+  RangeGroup = 4;
+  RangeString = 5;
+  RangeBuffer = 6;
+}
+
+enum msVariantType {
+  VariantInt = 0;
+  VariantUint = 1;
+  VariantString = 2;
+  VariantBuffer = 3;
+}
+
+enum msConfigSectionType {
+  SectionValue = 0;
+  SectionProperty = 1;
+  SectionArray = 2;
+  SectionGroup = 3;
+}
+
+message msRangeValue {
+  uint32 Value = 1;
+  string Name = 2;
+  msDescriptor StructDesc = 3;
+}
+
+message msRangeInt {
+  int32 Min = 1;
+  int32 Max = 2;
+  int32 Default = 3;
+}
+
+message msRangeUint {
+  uint32 Max = 1;
+  bool IsHex = 2;
+  uint32 Default = 3;
+}
+
+message msRangeString {
+  int32 Length = 1;
+  string Default = 2;
+}
+
+message msRangeBuffer {
+  int32 Size = 1;
+  bytes Default = 2;
+}
+
+message msRangeGroup {
+  msDescriptor StructDesc = 1;
+}
+
+message msRangeValues {
+  string Name = 1;
+  uint32 Default = 2;
+  repeated msRangeValue Values = 3;
+}
+
+message msPropertyRange {
+  msRangeType RangeType = 1;
+  oneof Param {
+    msRangeInt RangeInt = 60;
+    msRangeUint RangeUint = 61;
+    msRangeValues RangeValues = 62;
+    msRangeString RangeString = 63;
+    msRangeBuffer RangeBuffer = 64;
+    msRangeGroup RangeGroup = 65;
+  }
+}
+
+message msPropertyField {
+  string Name = 1;
+  msFieldType Type = 2;
+  int32 Size = 42;
+  int32 Offset = 43;
+  uint32 Tag = 44;
+  // field 45: unused/removed in original schema
+  int32 OffsetGroup = 46;
+  bool IsSubGroup = 47;
+  msPropertyRange Range = 48;
+  uint32 FieldID = 49;
+}
+
+message msDescriptor {
+  string Name = 1;
+  int32 Size = 2;
+  uint32 FieldNums = 3;
+  repeated msPropertyField Fields = 4;
+}
+
+message msVariant {
+  msVariantType Type = 1;
+  uint32 FieldID = 2;
+  oneof Param {
+    int32 IntVal = 50;
+    uint32 UintVal = 51;
+    string StrVal = 52;
+    bytes RawVal = 53;
+  }
+}
+
+message msPropertyParam {
+  string Name = 1;
+  repeated msVariant Values = 2;
+}
+
+message msProperty {
+  msDescriptor Property = 1;
+  msPropertyParam Param = 2;
+}
+
+message msConfigFile {
+  string ConfigName = 1;
+  string ConfigDescriptor = 2;
+  repeated ConfigValue Values = 3;
+  repeated ConfigSection Sections = 4;
+  message ConfigValue {
+    string ValueName = 50;
+    string ValueDescriptor = 51;
+    msVariant Value = 52;
+    msPropertyRange Range = 53;
+  }
+  message SectionArray {
+    msProperty Property = 70;
+    repeated msPropertyParam Values = 71;
+  }
+  message SectionGroup {
+    repeated ConfigSection Sections = 80;
+  }
+  message SectionValue {
+    repeated ConfigValue Values = 81;
+  }
+  message SectionProperty {
+    msProperty Property = 82;
+  }
+  message ConfigSection {
+    msConfigSectionType Type = 10;
+    string SectionName = 11;
+    string SectionDescriptor = 12;
+    uint32 SectionID = 13;
+    oneof Param {
+      SectionArray Array = 21;
+      SectionProperty Property = 22;
+      SectionGroup Group = 23;
+      SectionValue Value = 24;
+    }
+  }
+}

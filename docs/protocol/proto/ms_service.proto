@@ -1,0 +1,112 @@
+// Reconstructed from XHEAD-STUDIO decompiled client (ilspycmd). Schema only, no vendor implementation code.
+syntax = "proto3";
+
+// ms_service.proto — the top-level RPC surface: the msBroadcastService
+// definition, the session/connection object (msClient), and the
+// msRequest/msResponse envelope used by 4 of the 6 RPCs (the other 2,
+// subscribeService and sendControl, return a `stream msEvent` instead —
+// see ms_event.proto). See ../README.md for the full msServiceCmd usage
+// table (which oneof branch of msRequest.Param pairs with each command,
+// inferred from naming/oneof structure).
+
+import "ms_base.proto";
+import "ms_property.proto";
+import "ms_output.proto";
+import "ms_capture.proto";
+import "ms_engine.proto";
+import "ms_channel.proto";
+import "ms_source.proto";
+import "ms_event.proto";
+
+enum msServiceCmd {
+  CmdConnect = 0;
+  CmdSubscribe = 1;
+  CmdUnsubscribe = 2;
+  CmdDisconnect = 3;
+  CmdControl = 4;
+  CmdApplyConfig = 5;
+  CmdChannelOpen = 20;
+  CmdChannelClose = 21;
+  CmdChannelReset = 22;
+  CmdChannelStart = 23;
+  CmdChannelStop = 24;
+  CmdProgramAdd = 25;
+  CmdProgramCommit = 26;
+  CmdProgramReset = 27;
+  CmdProgramApply = 28;
+  CmdSourceOpen = 40;
+  CmdSourceClose = 41;
+  CmdSourceStart = 42;
+  CmdSourceStop = 43;
+  CmdSourceApply = 44;
+  CmdSourceReset = 45;
+  CmdCaptureOpen = 50;
+  CmdCaptureClose = 51;
+  CmdCaptureStart = 52;
+  CmdCaptureStop = 53;
+  CmdEngineApply = 60;
+  CmdMax = 255;
+}
+
+enum msPrivilege {
+  PrivilegeNull = 0;
+  PrivilegeDebug = 1;
+  PrivilegeControl = 2;
+}
+
+message msClient {
+  uint32 HandleID = 1;
+  uint32 Privlege = 2;
+  string Name = 3;
+  msSystem System = 4;
+  msStorage Storage = 5;
+  msConfigFile Config = 6;
+  repeated msEngine Engines = 10;
+  repeated msCapture Captures = 11;
+  repeated msChannel Channels = 12;
+  repeated msSource Sources = 13;
+  repeated msOutput Outputs = 14;
+}
+
+message msClientParam {
+  msPrivilege Privilege = 1;
+  string Name = 2;
+}
+
+message msRequest {
+  msServiceCmd Cmd = 1;
+  uint32 ClientID = 2;
+  uint32 HandleID = 3;
+  repeated msPropertyParam Properties = 4;
+  oneof Param {
+    int32 Index = 50;
+    msClientParam Client = 51;
+    msSourceParam Source = 52;
+    msMediaContent Content = 53;
+    msChannelParam Channel = 54;
+    msControlParam Control = 55;
+  }
+}
+
+message msResponse {
+  msServiceCmd Cmd = 1;
+  msStatus Status = 2;
+  msResult Result = 3;
+  oneof Param {
+    msClient Client = 50;
+    string ErrMessage = 51;
+    uint32 HandleID = 52;
+    msChannel Channel = 53;
+    msProgram Program = 54;
+    msSource Source = 55;
+  }
+}
+
+service msBroadcastService {
+  rpc connectService (msRequest) returns (msResponse);
+  rpc subscribeService (msRequest) returns (stream msEvent);
+  rpc unsubscribeService (msRequest) returns (msResponse);
+  rpc disconnectService (msRequest) returns (msResponse);
+  rpc sendRequest (msRequest) returns (msResponse);
+  rpc sendControl (msRequest) returns (stream msEvent);
+}
