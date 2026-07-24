@@ -1,0 +1,23 @@
+# 公式アプリのデコンパイル済みソースは著作権上リポジトリに含めない（ローカル参照のみ）
+/decompiled/
+
+# 実キャプチャデータ（大容量・生データ）。厳選したサンプルのみ docs/samples 等で個別管理する
+/captures/*
+!/captures/.gitkeep
+!/captures/README.md
+
+# .NET / Visual Studio
+bin/
+obj/
+*.user
+.vs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+Thumbs.db
+.DS_Store

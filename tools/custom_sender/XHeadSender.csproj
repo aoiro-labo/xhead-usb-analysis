@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    XHEAD-STUDIO のバックグラウンドサービス (mnservice.exe, localhost:50051 gRPC) に
+    公式クライアントDLL経由で直接接続する独自ツール。
+    公式GUI (xhead_studio.exe) の制限をバイパスし、mnFramework.grpc の全プロパティに
+    アクセスすることを目的とする。
+
+    前提: このマシンに XHEAD-STUDIO がインストール済みであること
+    (既定パス: C:\Program Files\Micomsoft\XHEAD-STUDIO)。
+    参照DLLはインストール先から直接参照し、リポジトリには含めない。
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>XHeadSender</RootNamespace>
+    <AssemblyName>XHeadSender</AssemblyName>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <XHeadStudioDir Condition="'$(XHeadStudioDir)' == ''">C:\Program Files\Micomsoft\XHEAD-STUDIO</XHeadStudioDir>
+  </PropertyGroup>
+
+  <!--
+    Private=true (既定) にしてビルド出力(bin/obj、.gitignore対象)にDLLをコピーする。
+    リポジトリには含めない。実行時に mnClientDotNet.dll 等を確実に解決するための措置。
+  -->
+  <ItemGroup>
+    <Reference Include="mnClientDotNet">
+      <HintPath>$(XHeadStudioDir)\mnClientDotNet.dll</HintPath>
+    </Reference>
+    <Reference Include="Google.Protobuf">
+      <HintPath>$(XHeadStudioDir)\Google.Protobuf.dll</HintPath>
+    </Reference>
+    <Reference Include="Grpc.Core">
+      <HintPath>$(XHeadStudioDir)\Grpc.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="Grpc.Core.Api">
+      <HintPath>$(XHeadStudioDir)\Grpc.Core.Api.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Memory">
+      <HintPath>$(XHeadStudioDir)\System.Memory.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Buffers">
+      <HintPath>$(XHeadStudioDir)\System.Buffers.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Runtime.CompilerServices.Unsafe">
+      <HintPath>$(XHeadStudioDir)\System.Runtime.CompilerServices.Unsafe.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Grpc.Core のネイティブ拡張(grpc_csharp_ext)も出力にコピーする -->
+  <ItemGroup>
+    <None Include="$(XHeadStudioDir)\grpc_csharp_ext.x64.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>grpc_csharp_ext.x64.dll</Link>
+    </None>
+    <None Include="$(XHeadStudioDir)\grpc_csharp_ext.x86.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>grpc_csharp_ext.x86.dll</Link>
+    </None>
+  </ItemGroup>
+
+</Project>
