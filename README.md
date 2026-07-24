@@ -17,9 +17,12 @@
 ## ディレクトリ構成
 
 ```
-docs/                 解析ドキュメント
-  architecture.md      XHEAD-STUDIOの全体アーキテクチャ、隠しDebugモードの発見など
-  protocol/            gRPCプロトコルのリファレンス実装非依存な再構成 (.proto + 解説)
+docs/                          解析ドキュメント
+  architecture.md               XHEAD-STUDIOの全体アーキテクチャ、隠しDebugモードの発見など
+  gui_debug_mode_comparison.md  通常時/Debug有効時のGUIスクリーンショット比較
+  protocol/                     gRPCプロトコルのリファレンス実装非依存な再構成 (.proto + 解説)
+    modulation_capabilities.md   実機で確認した変調パラメータの実際の姿(FieldID等)
+  screenshots/                  上記ドキュメントで使用するスクリーンショット
 tools/
   custom_sender/        独自送出ツール (C#, mnClientDotNet.dll を参照して mnservice.exe に直接接続)
   usb_capture/           USBプロトコル解析用スクリプト・メモ (USBPcap/Wireshark)
@@ -32,9 +35,15 @@ decompiled/            公式アプリのデコンパイル結果（著作権上
 
 XHEAD-STUDIOは **GUI (`xhead_studio.exe`)** と **バックグラウンドサービス (`service\mnservice.exe`)** の2プロセス構成で、両者は `localhost:50051` の **gRPC** で通信しています。実機とのUSB通信は `mnservice.exe`（ネイティブバイナリ）が担当します。
 
-最大の発見は、GUI側に **`EnableDebugMode` という隠しフラグ** が存在し、これを有効にすると変調パラメータ（Constellation / CodeRate / GuardInterval / FFT / TimeInterleave 等）をはじめ、映像・音声・コーデックの詳細設定が公式GUI上に解放されることです。このフラグは設定ファイル保存時には書き出されない仕様ですが、設定ファイルを直接編集すれば有効化できます。
+最大の発見は、GUI側に **`EnableDebugMode` という隠しフラグ** が存在し、これを有効にすると変調パラメータ（Constellation / CodeRate / GuardInterval / FFT / TimeInterleave 等）をはじめ、映像・音声・コーデックの詳細設定が公式GUI上に解放されることです。このフラグは設定ファイル保存時には書き出されない仕様ですが、設定ファイルを直接編集すれば有効化できます。実際にどう変わるかは [docs/gui_debug_mode_comparison.md](docs/gui_debug_mode_comparison.md) でスクリーンショット付きにまとめています。
 
-さらに、GUI⇔サービス間の通信は固定メッセージではなく汎用的なプロパティツリー方式のため、公式GUIが一切参照していない設定項目がサービス側に存在する可能性があります。`tools/custom_sender` はこのサービスに直接接続し、公式GUIの制限を経由せずにフル機能へアクセスすることを目指す独自クライアントです。
+<p align="center">
+  <img src="docs/screenshots/normal/01_出力設定_変調設定.png" width="45%" alt="通常時の変調設定タブ">
+  <img src="docs/screenshots/debug/01_出力設定_変調設定.png" width="45%" alt="Debug有効時の変調設定タブ">
+  <br><sub>左: 通常時／右: EnableDebugMode有効時（変調設定タブ）</sub>
+</p>
+
+さらに、GUI⇔サービス間の通信は固定メッセージではなく汎用的なプロパティツリー方式のため、公式GUIが一切参照していない設定項目がサービス側に存在する可能性があります。実機から実際に読み出した変調パラメータの完全なFieldID一覧は [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) を参照してください（ISDB-T以外にDVB-T2/ATSC/DTMB等のサブ構造体まで存在することが判明しています）。`tools/custom_sender` はこのサービスに直接接続し、公式GUIの制限を経由せずにフル機能へアクセスすることを目指す独自クライアントです。
 
 ## 独自送出ツール (tools/custom_sender)
 

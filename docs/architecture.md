@@ -67,7 +67,10 @@ public bool EnableDebugMode { get; set; }   // xSystemParam.cs:75, デフォル�
 | FFT (キャリア数モード) | xFFT: 2K/4K/8K 等 | × | ○ |
 | TimeInterleave | xTimeInterleave: Disable, Mode1-3 | × | ○ |
 
-同様に `uiMedia.cs` / `uiCodec.cs` / `uiChannel.cs` / `uiEPG.cs` もDebugモードで解像度・フレームレート・音声チャンネル/ビットレート・コーデック詳細・EPGなどの制限が緩和される（要個別確認）。
+同様に `uiMedia.cs` / `uiCodec.cs` / `uiChannel.cs` / `uiEPG.cs` もDebugモードで制限が緩和される。
+実機スクリーンショットによる比較・確認結果は [docs/gui_debug_mode_comparison.md](gui_debug_mode_comparison.md)
+にまとめてある（実際に増えたのは PCR/PMT PID・Video/Audio PID・EPG Event ID・BMLタブで、
+コーデック設定・システム設定タブは見た目上の差分なしと判明）。
 
 `EnableBML` は BML (ARIB Broadcast Markup Language、データ放送)ファイルのインポート機能 (`uiBML.cs`, `formBML.cs`) に関連。データ放送コンテンツを持たせられる可能性がある。
 
