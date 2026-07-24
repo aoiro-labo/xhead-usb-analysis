@@ -69,6 +69,78 @@ namespace XHeadSender
                 {
                     Console.WriteLine("[XHeadSender] connectService OK.");
 
+                    var msClient = response.Client;
+                    uint firstModulationOutputHandle = 0;
+                    Console.WriteLine();
+                    Console.WriteLine("=== Outputs ===");
+                    foreach (var output in msClient.Outputs)
+                    {
+                        Console.WriteLine($"[Output] HandleID={output.HandleID} ObjectID={output.ObjectID} ObjectType={output.ObjectType} Name={output.Name} Path={output.Path}");
+                        if (output.ObjectType == msObjectType.ObjectOutputModulation && firstModulationOutputHandle == 0)
+                        {
+                            firstModulationOutputHandle = output.HandleID;
+                        }
+                        foreach (var prop in output.Properties)
+                        {
+                            DumpProperty(prop, 1);
+                        }
+                    }
+
+                    Console.WriteLine();
+                    Console.WriteLine("=== Channels ===");
+                    foreach (var ch in msClient.Channels)
+                    {
+                        Console.WriteLine($"[Channel] HandleID={ch.HandleID} Name={ch.Name}");
+                    }
+
+                    Console.WriteLine();
+                    Console.WriteLine("=== Sources ===");
+                    foreach (var src in msClient.Sources)
+                    {
+                        Console.WriteLine($"[Source] HandleID={src.HandleID}");
+                    }
+
+                    Console.WriteLine();
+                    Console.WriteLine("=== CmdChannelOpen probe ===");
+                    try
+                    {
+                        var openReq = new msRequest
+                        {
+                            Cmd = msServiceCmd.CmdChannelOpen,
+                            ClientID = msClient.HandleID,
+                            HandleID = firstModulationOutputHandle,
+                            Channel = new msChannelParam { Name = "XHeadSenderProbe" }
+                        };
+                        var openResp = client.sendRequest(openReq, deadline: DateTime.UtcNow.AddSeconds(5));
+                        Console.WriteLine($"  Result={openResp.Result} ParamCase={openResp.ParamCase}");
+                        if (openResp.ParamCase == msResponse.ParamOneofCase.Channel)
+                        {
+                            var newCh = openResp.Channel;
+                            Console.WriteLine($"[Channel] HandleID={newCh.HandleID} ObjectID={newCh.ObjectID} OutputID={newCh.OutputID} Name={newCh.Name} ObjectType={newCh.ObjectType} Status={newCh.Status}");
+                            foreach (var prop in newCh.Properties)
+                            {
+                                DumpProperty(prop, 1);
+                            }
+
+                            var closeReq = new msRequest
+                            {
+                                Cmd = msServiceCmd.CmdChannelClose,
+                                ClientID = msClient.HandleID,
+                                HandleID = newCh.HandleID
+                            };
+                            var closeResp = client.sendRequest(closeReq, deadline: DateTime.UtcNow.AddSeconds(5));
+                            Console.WriteLine($"  CmdChannelClose Result={closeResp.Result}");
+                        }
+                        else if (openResp.ParamCase == msResponse.ParamOneofCase.ErrMessage)
+                        {
+                            Console.WriteLine($"  ErrMessage={openResp.ErrMessage}");
+                        }
+                    }
+                    catch (RpcException ex)
+                    {
+                        Console.WriteLine($"  CmdChannelOpen RPC error: {ex.Status}");
+                    }
+
                     var disconnect = new msRequest { Cmd = msServiceCmd.CmdDisconnect, ClientID = 0 };
                     client.disconnectService(disconnect, deadline: DateTime.UtcNow.AddSeconds(5));
                     Console.WriteLine("[XHeadSender] disconnectService OK.");
@@ -88,6 +160,98 @@ namespace XHeadSender
             finally
             {
                 channel.ShutdownAsync().Wait();
+            }
+        }
+
+        private static void DumpProperty(msProperty prop, int indent)
+        {
+            string pad = new string(' ', indent * 2);
+            var desc = prop.Property;
+            var param = prop.Param;
+            Console.WriteLine($"{pad}Property \"{desc.Name}\" (size={desc.Size}, fieldNums={desc.FieldNums})");
+            DumpDescriptor(desc, param, indent + 1);
+        }
+
+        private static void DumpDescriptor(msDescriptor desc, msPropertyParam param, int indent)
+        {
+            string pad = new string(' ', indent * 2);
+            foreach (var field in desc.Fields)
+            {
+                string valueStr = "";
+                if (param != null)
+                {
+                    foreach (var v in param.Values)
+                    {
+                        if (v.FieldID == field.FieldID)
+                        {
+                            valueStr = DumpVariant(v);
+                            break;
+                        }
+                    }
+                }
+
+                string rangeStr = DumpRange(field.Range);
+
+                Console.WriteLine($"{pad}- {field.Name} (FieldID={field.FieldID}, Type={field.Type}, Offset={field.Offset}, Size={field.Size}, IsSubGroup={field.IsSubGroup}) value=[{valueStr}] range=[{rangeStr}]");
+
+                if (field.Range != null && field.Range.RangeGroup != null && field.Range.RangeGroup.StructDesc != null)
+                {
+                    DumpDescriptor(field.Range.RangeGroup.StructDesc, null, indent + 1);
+                }
+
+                if (field.Range != null && field.Range.RangeValues != null)
+                {
+                    foreach (var rv in field.Range.RangeValues.Values)
+                    {
+                        if (rv.StructDesc != null)
+                        {
+                            Console.WriteLine($"{pad}  [when {field.Name}={rv.Name}]");
+                            DumpDescriptor(rv.StructDesc, null, indent + 2);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static string DumpVariant(msVariant v)
+        {
+            switch (v.ParamCase)
+            {
+                case msVariant.ParamOneofCase.IntVal: return $"int:{v.IntVal}";
+                case msVariant.ParamOneofCase.UintVal: return $"uint:{v.UintVal}";
+                case msVariant.ParamOneofCase.StrVal: return $"str:{v.StrVal}";
+                case msVariant.ParamOneofCase.RawVal: return $"raw[{v.RawVal.Length}bytes]";
+                default: return "(none)";
+            }
+        }
+
+        private static string DumpRange(msPropertyRange r)
+        {
+            if (r == null) return "";
+            switch (r.ParamCase)
+            {
+                case msPropertyRange.ParamOneofCase.RangeInt:
+                    return $"int {r.RangeInt.Min}..{r.RangeInt.Max} (default {r.RangeInt.Default})";
+                case msPropertyRange.ParamOneofCase.RangeUint:
+                    return $"uint 0..{r.RangeUint.Max} (default {r.RangeUint.Default}, hex={r.RangeUint.IsHex})";
+                case msPropertyRange.ParamOneofCase.RangeValues:
+                    {
+                        var names = new System.Collections.Generic.List<string>();
+                        foreach (var rv in r.RangeValues.Values)
+                        {
+                            string tag = rv.StructDesc != null ? $"{rv.Value}={rv.Name}(+struct)" : $"{rv.Value}={rv.Name}";
+                            names.Add(tag);
+                        }
+                        return $"enum[{string.Join(", ", names)}] (default {r.RangeValues.Default})";
+                    }
+                case msPropertyRange.ParamOneofCase.RangeString:
+                    return $"string maxlen={r.RangeString.Length}";
+                case msPropertyRange.ParamOneofCase.RangeBuffer:
+                    return $"buffer maxsize={r.RangeBuffer.Size}";
+                case msPropertyRange.ParamOneofCase.RangeGroup:
+                    return "group";
+                default:
+                    return "";
             }
         }
     }

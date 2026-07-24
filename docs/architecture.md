@@ -120,16 +120,36 @@ XHEAD-2にはBML設定用の内蔵Webサーバー（`XHEAD-2_BML_WEB.pdf`参照�
 配下 (`uiBML.cs`) に統合されており、XHEAD-2の「USBドライブにtsファイルをドラッグ&ドロップ」
 方式とは別の実装に置き換わっていると考えられる。
 
-## 6. 未解析・要調査
+## 6. 検討した代替アプローチ（却下 or 保留）
+
+- **TSDuckの `vatek`/`hides` 出力プラグインで直接OFDM変調できないか**: XHEAD-USB内部の変調チップが
+  VATek系またはHiDes系のOEMチップであれば、TSDuckから直接ISDB-T変調を叩けないか検討。
+  `tsvatek -a` / `tshides` とも実機接続状態で **0台検出**（2026-07-24確認）。Micomsoft独自VID
+  (`17A7:0008`) のため、これらのツールが想定する既知チップのVID/PIDパターンには一致しない。
+  内部チップが本当にVATek/HiDes系かどうかまでは否定できないが、少なくとも「挿すだけで動く」
+  ショートカットではない。
+- **ffmpegを弄って直接RF出力できないか**: `mnservice.exe`が使うffmpegは、映像/音声入力をTS化する
+  **エンコード段**（`msSourceParam`のTranscode/Resampleモードに相当）であり、OFDM変調(RF出力)は
+  別レイヤ（未解析のUSB生プロトコル）が担っていると考えられる。ffmpeg層をいじっても変調そのものは
+  バイパスできない。ただし「任意のTSコンテンツを送出したい」という目的自体は、既存の
+  Source/Channel経路（`CmdSourceOpen`+`msSourceParam`、config中の`MediaFiles`）で既に達成可能。
+
+## 7. 未解析・要調査
 
 - [ ] `mnservice.exe` 本体のネイティブ解析（USB生プロトコル、Ghidra/IDA向き）
 - [ ] libusbK 経由でのUSB通信を Wireshark + USBPcap で実キャプチャ（現在はWinUSBに復元済みのため、
       比較のため意図的にlibusbKへ切り替えて観測するか要検討）
 - [x] gRPC reflection の有効性確認 → reflectionではなく `Ms*Reflection.cs` 埋め込みの
       `FileDescriptorProto` から確定情報を取得済み（`docs/protocol/`）
-- [x] Debugモード解放の実機確認 → 実機接続自体はドライバ問題で一旦ブロックされていたが解消。
-      GUI上でのDebugタブの見た目確認は次のステップ
+- [x] Debugモード解放の実機確認 → ドライバ修正後、GUIに「BML」タブと「デバッグ機能を
+      有効にする」トグルなどが実際に出現することを確認済み（2026-07-24, ユーザーのスクリーン
+      ショットで確認）
+- [x] `tools/custom_sender` から実際に `msClient.Outputs`/`Properties` を列挙し、変調パラメータの
+      実際の `FieldID`/`msPropertyRange` を確定 → `docs/protocol/modulation_capabilities.md` に
+      まとめた。ISDB_T(Constellation=19, Bandwidth=20, FFT=21, CodeRate=22, GuardInterval=23,
+      TimeInterleavce=24)に加え、`Mode`セレクタの選択肢としてDVB_T/J83A/ATSC/J83B/DTMB/J83C/
+      DVB_T2の完全なサブ構造体まで存在することが判明（変調チップは多規格対応の可能性が高い。
+      ただし実際にISDB-T以外へ切替可能・安全かは別問題。同ファイルの注意事項を参照）
 - [ ] RTL-SDRループバックでの実信号検証（設定値と実際のRF出力の対応関係）
-- [ ] `tools/custom_sender` から実際に `msClient.Outputs`/`Properties` を列挙し、
-      変調パラメータの実際の `FieldID`/`msPropertyRange` を確定させる（`docs/protocol/README.md`
-      の worked example はプレースホルダ値であり、実接続での裏取りが必要）
+- [ ] `tools/custom_sender` から実際に値をSet（`CmdApplyConfig`）する経路の検証・実装
+      （現状は読み取り/CmdChannelOpen-Closeの往復のみ確認済み）
