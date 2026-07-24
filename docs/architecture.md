@@ -102,6 +102,11 @@ public bool EnableDebugMode { get; set; }   // xSystemParam.cs:75, デフォル�
 - ファームウェア書き換えも同じローカルgRPC面 (`sendControl` + `msControlParam` +
   `msFirmwareFile`/`msFWUsbConfig`) に載っており、アクセス制御は接続時に自己申告する
   `msPrivilege` のみ（暗号的な認証は無し。localhost限定であることが前提の設計と見られる）。
+- **オブジェクトのスコープに2種類ある**（実機テストで確認, 2026-07-25）。`msClient.Outputs`/
+  `Engines`/`Captures`はハードウェア/システムリソースとしてどの接続からも同じ内容で見える
+  グローバルなものである一方、`msClient.Channels`/`Sources`は**接続（クライアント）ごとに
+  プライベート**であり、別のgRPC接続から`connectService`しても他クライアントが開いた
+  Channel/Sourceは一切見えない（空リストが返る）。
 
 ## 5. USBドライバ問題（発見・解決済み）
 

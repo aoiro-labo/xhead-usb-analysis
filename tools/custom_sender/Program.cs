@@ -326,14 +326,25 @@ namespace XHeadSender
             Console.Out.Flush();
 
             // The GUI (xTaskStartChannel) polls source_.Status until StatusReady before applying
-            // content. There is no "get source" RPC, so the only way to observe the async file
-            // probe finishing is the subscribeService event stream (EventSource* with an updated
-            // msSource carrying Content once ready).
+            // content. EventSourceStatus (confirmed via mnClient.handleSource()) only ever carries
+            // a bare msStatus, never an updated Content -- so instead, open a second, independent
+            // (non-controller / PrivilegeDebug) connection and call connectService again: its
+            // response is a full state snapshot (msClient.Sources[]) that should reflect whatever
+            // mnservice has finished probing server-side, without disturbing our primary session.
             if ((src.Content?.Programs.Count ?? 0) == 0)
             {
-                Console.WriteLine("  Source not ready yet, waiting on event stream (up to 10s)...");
-                var updated = watcher.WaitForReadySource(src.HandleID, TimeSpan.FromSeconds(10));
-                if (updated != null) src = updated;
+                Console.WriteLine("  Source not ready yet. Waiting ~10s for async probe, then peeking via a second connection...");
+                Thread.Sleep(10000);
+                var peeked = PeekSourceViaSecondaryConnection(src.HandleID);
+                if (peeked != null)
+                {
+                    Console.WriteLine($"  Peeked source: Status={peeked.Status} Programs={peeked.Content?.Programs.Count ?? 0}");
+                    src = peeked;
+                }
+                else
+                {
+                    Console.WriteLine("  Peek did not find the source.");
+                }
             }
 
             if ((src.Content?.Programs.Count ?? 0) == 0)
@@ -444,6 +455,51 @@ namespace XHeadSender
             client.sendRequest(sourceStopReq, deadline: DateTime.UtcNow.AddSeconds(5));
             CloseSource(client, clientId, src.HandleID);
             CloseChannel(client, clientId, chHandle);
+        }
+
+        /// <summary>
+        /// Opens a brand-new gRPC connection with PrivilegeDebug (non-exclusive -- does not
+        /// conflict with an existing PrivilegeControl controller) purely to read a fresh
+        /// msClient.Sources snapshot, then disconnects. Used to check whether a source's Content
+        /// has been populated server-side after async probing, since no other RPC exposes this.
+        /// </summary>
+        private static msSource PeekSourceViaSecondaryConnection(uint sourceHandle)
+        {
+            var peekChannel = new Channel(ServiceAddress, ChannelCredentials.Insecure);
+            var peekClient = new msBroadcastService.msBroadcastServiceClient(peekChannel);
+            try
+            {
+                var req = new msRequest
+                {
+                    Cmd = msServiceCmd.CmdConnect,
+                    ClientID = 0,
+                    Client = new msClientParam { Name = "XHeadSenderPeek", Privilege = msPrivilege.PrivilegeDebug }
+                };
+                var resp = peekClient.connectService(req, deadline: DateTime.UtcNow.AddSeconds(5));
+                Console.WriteLine($"  [peek] connect Result={resp.Result} Sources={resp.Client?.Sources.Count ?? 0}");
+                if (resp.Result != msResult.ResultSuccess || resp.ParamCase != msResponse.ParamOneofCase.Client)
+                {
+                    return null;
+                }
+                msSource found = null;
+                foreach (var s in resp.Client.Sources)
+                {
+                    Console.WriteLine($"  [peek] Source HandleID={s.HandleID} Status={s.Status} Programs={s.Content?.Programs.Count ?? 0}");
+                    if (s.HandleID == sourceHandle) found = s;
+                }
+                var disc = new msRequest { Cmd = msServiceCmd.CmdDisconnect, ClientID = resp.Client.HandleID };
+                peekClient.disconnectService(disc, deadline: DateTime.UtcNow.AddSeconds(5));
+                return found;
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  [peek] RPC error: {ex.Status}");
+                return null;
+            }
+            finally
+            {
+                peekChannel.ShutdownAsync().Wait();
+            }
         }
 
         private static void CloseChannel(msBroadcastService.msBroadcastServiceClient client, uint clientId, uint chHandle)
