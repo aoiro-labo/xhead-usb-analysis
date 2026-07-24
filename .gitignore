@@ -4,6 +4,9 @@
 # マイコンソフト提供の資料PDF類（著作権上リポジトリに含めない。ローカル参照のみ）
 *.pdf
 
+# スクリーンショットの生データ・作業用フォルダ（厳選・切り出し済みのものは docs/screenshots/ 側で管理）
+/XHEAD STUDIO/
+
 # 実キャプチャデータ（大容量・生データ）。厳選したサンプルのみ docs/samples 等で個別管理する
 /captures/*
 !/captures/.gitkeep
