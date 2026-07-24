@@ -22,7 +22,26 @@ namespace XHeadSender
     internal sealed class EventWatcher
     {
         private readonly ConcurrentDictionary<uint, msSource> _latestSources = new ConcurrentDictionary<uint, msSource>();
+        private readonly ConcurrentDictionary<uint, msEventStatus> _latestStatus = new ConcurrentDictionary<uint, msEventStatus>();
         private Task _pump;
+
+        // msEvent.Status is an msEventStatus WRAPPER, not a bare msStatus -- and critically it has
+        // its own Content (msContent) field (oneof branch 10). mnClient.handleSource() in the
+        // official GUI only ever reads .Status.Status and silently discards .Status.Content, which
+        // is why reading the decompiled wrapper code made it look like this event never carries
+        // Content. It does, in the raw protobuf -- just read it directly instead of going through
+        // the wrapper's narrower accessor.
+        public msEventStatus WaitForStatusReady(uint handle, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                if (_latestStatus.TryGetValue(handle, out var s) && s.Status == msStatus.StatusReady) return s;
+                Thread.Sleep(200);
+            }
+            _latestStatus.TryGetValue(handle, out var last);
+            return last;
+        }
 
         public void Start(msBroadcastService.msBroadcastServiceClient client, uint clientId)
         {
@@ -40,7 +59,20 @@ namespace XHeadSender
                             _latestSources[ev.HandleID] = ev.Source;
                             Console.WriteLine($"  [event] {ev.ID} HandleID={ev.HandleID} Source.Status={ev.Source.Status} Programs={ev.Source.Content?.Programs.Count ?? 0}");
                         }
-                        else
+                        else if (ev.ParamCase == msEvent.ParamOneofCase.Update)
+                        {
+                            Console.WriteLine($"  [event] {ev.ID} HandleID={ev.HandleID} Update.Status={ev.Update.Status} Update.Properties={ev.Update.Properties.Count}");
+                            foreach (var p in ev.Update.Properties)
+                            {
+                                Console.WriteLine($"    Property \"{p.Property.Name}\" values={p.Param.Values.Count}");
+                            }
+                        }
+                        else if (ev.ParamCase == msEvent.ParamOneofCase.Status)
+                        {
+                            if (ev.HandleID != 0) _latestStatus[ev.HandleID] = ev.Status;
+                            Console.WriteLine($"  [event] {ev.ID} HandleID={ev.HandleID} Status={ev.Status.Status} ContentPrograms={ev.Status.Content?.Programs.Count ?? 0}");
+                        }
+                        else if (ev.ParamCase != msEvent.ParamOneofCase.Profiler)
                         {
                             Console.WriteLine($"  [event] {ev.ID} HandleID={ev.HandleID} ParamCase={ev.ParamCase}");
                         }
@@ -149,6 +181,21 @@ namespace XHeadSender
                     }
 
                     Console.WriteLine();
+                    Console.WriteLine("=== Captures (pre-existing hardware capture devices) ===");
+                    foreach (var cap in msClient.Captures)
+                    {
+                        Console.WriteLine($"[Capture] HandleID={cap.HandleID} ObjectType={cap.ObjectType} Name={cap.Name} Path={cap.Path} CaptureType={cap.CaptureType} Status={cap.Status} Programs={cap.Content?.Programs.Count ?? 0}");
+                        foreach (var p in cap.Content?.Programs ?? new Google.Protobuf.Collections.RepeatedField<msContent.Types.Program>())
+                        {
+                            Console.WriteLine($"    Program ID={p.ID} Streams={p.Streams.Count}");
+                            foreach (var s in p.Streams)
+                            {
+                                Console.WriteLine($"      Stream Index={s.Index} ID={s.ID} Format={s.Format}");
+                            }
+                        }
+                    }
+
+                    Console.WriteLine();
                     Console.WriteLine("=== Channels ===");
                     foreach (var ch in msClient.Channels)
                     {
@@ -246,7 +293,97 @@ namespace XHeadSender
             }
         }
 
-        private const string TestSourceFile = @"C:\Users\aoiro\Videos\ts\Record_20251109-210722.ts";
+        private const string TestSourceFile = @"C:\Users\aoiro\Videos\ts\test_clip_10s.ts";
+
+        /// <summary>
+        /// Quick standalone check: does opening a SourceCapture (referencing an already-enumerated
+        /// hardware capture device, e.g. desktop capture) populate msSource.Content synchronously
+        /// in the CmdSourceOpen response, unlike SourceUrl which always comes back empty/StatusPrepare?
+        /// Opens, dumps, and immediately closes -- does not proceed to ProgramApply/ChannelStart.
+        /// </summary>
+        private static void RunCaptureSourceProbe(msBroadcastService.msBroadcastServiceClient client, msClient msClient, EventWatcher watcher)
+        {
+            Console.WriteLine();
+            Console.WriteLine("=== SourceCapture probe (desktop capture, should be format-instant) ===");
+
+            msCapture desktopCap = null;
+            foreach (var cap in msClient.Captures)
+            {
+                if (cap.CaptureType == msCaptureType.Dxgidesktop) { desktopCap = cap; break; }
+            }
+            if (desktopCap == null)
+            {
+                Console.WriteLine("  No Dxgidesktop capture found, skipping.");
+                return;
+            }
+            Console.WriteLine($"  Using capture: {desktopCap.Name} ({desktopCap.Path}) HandleID={desktopCap.HandleID}");
+
+            var capOpenReq = new msRequest { Cmd = msServiceCmd.CmdCaptureOpen, ClientID = msClient.HandleID, HandleID = desktopCap.HandleID };
+            var capOpenResp = client.sendRequest(capOpenReq, deadline: DateTime.UtcNow.AddSeconds(8));
+            Console.WriteLine($"  CaptureOpen: Result={capOpenResp.Result} Status={capOpenResp.Status} ParamCase={capOpenResp.ParamCase}" +
+                (capOpenResp.HasErrMessage ? $" ErrMessage={capOpenResp.ErrMessage}" : ""));
+
+            Console.WriteLine("  Waiting 3s for capture to reach Ready...");
+            Thread.Sleep(3000);
+
+            var capStartReq = new msRequest { Cmd = msServiceCmd.CmdCaptureStart, ClientID = msClient.HandleID, HandleID = desktopCap.HandleID };
+            var capStartResp = client.sendRequest(capStartReq, deadline: DateTime.UtcNow.AddSeconds(8));
+            Console.WriteLine($"  CaptureStart: Result={capStartResp.Result} Status={capStartResp.Status} ParamCase={capStartResp.ParamCase}" +
+                (capStartResp.HasErrMessage ? $" ErrMessage={capStartResp.ErrMessage}" : ""));
+
+            Console.WriteLine("  Waiting 2s then peeking Captures via a second connection (Captures are shared, unlike Sources)...");
+            Thread.Sleep(2000);
+            var peekedCap = PeekCaptureViaSecondaryConnection(desktopCap.HandleID);
+            if (peekedCap != null)
+            {
+                Console.WriteLine($"  Peeked capture: Status={peekedCap.Status} Programs={peekedCap.Content?.Programs.Count ?? 0}");
+                foreach (var p in peekedCap.Content?.Programs ?? new Google.Protobuf.Collections.RepeatedField<msContent.Types.Program>())
+                {
+                    Console.WriteLine($"    Program ID={p.ID} Streams={p.Streams.Count}");
+                    foreach (var s in p.Streams) Console.WriteLine($"      Stream Index={s.Index} ID={s.ID} Format={s.Format}");
+                }
+            }
+
+            var capParam = new msCaptureParam();
+            capParam.Content.Add(new msCaptureParam.Types.Capture { HandleID = desktopCap.HandleID, ProgramID = 0, StreamIndex = 0 });
+
+            var req = new msRequest
+            {
+                Cmd = msServiceCmd.CmdSourceOpen,
+                ClientID = msClient.HandleID,
+                Source = new msSourceParam { Mode = msSourceMode.SourceCapture, Name = "XHeadSenderCaptureProbe", Capture = capParam }
+            };
+            msResponse resp;
+            try
+            {
+                resp = client.sendRequest(req, deadline: DateTime.UtcNow.AddSeconds(8));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  SourceOpen(Capture) RPC error: {ex.Status}");
+                return;
+            }
+            Console.WriteLine($"  Result={resp.Result} ParamCase={resp.ParamCase}" + (resp.HasErrMessage ? $" ErrMessage={resp.ErrMessage}" : ""));
+            if (resp.ParamCase == msResponse.ParamOneofCase.Source)
+            {
+                var src = resp.Source;
+                Console.WriteLine($"  Source: HandleID={src.HandleID} Status={src.Status} Programs={src.Content?.Programs.Count ?? 0}");
+                foreach (var p in src.Content?.Programs ?? new Google.Protobuf.Collections.RepeatedField<msContent.Types.Program>())
+                {
+                    Console.WriteLine($"    Program ID={p.ID} Streams={p.Streams.Count}");
+                    foreach (var s in p.Streams) Console.WriteLine($"      Stream Index={s.Index} ID={s.ID} Format={s.Format}");
+                }
+                var closeReq = new msRequest { Cmd = msServiceCmd.CmdSourceClose, ClientID = msClient.HandleID, HandleID = src.HandleID };
+                var closeResp = client.sendRequest(closeReq, deadline: DateTime.UtcNow.AddSeconds(5));
+                Console.WriteLine($"  SourceClose: Result={closeResp.Result}");
+            }
+
+            var capStopReq = new msRequest { Cmd = msServiceCmd.CmdCaptureStop, ClientID = msClient.HandleID, HandleID = desktopCap.HandleID };
+            client.sendRequest(capStopReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            var capCloseReq = new msRequest { Cmd = msServiceCmd.CmdCaptureClose, ClientID = msClient.HandleID, HandleID = desktopCap.HandleID };
+            var capCloseResp = client.sendRequest(capCloseReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  CaptureClose: Result={capCloseResp.Result}");
+        }
 
         private static void RunFullPipelineTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher)
         {
@@ -280,8 +417,15 @@ namespace XHeadSender
                 return;
             }
             int programIndex = addResp.Program.Index;
+            Console.WriteLine($"  Program.Properties = {addResp.Program.Properties.Count}");
+            foreach (var prop in addResp.Program.Properties) DumpProperty(prop, 2);
+            Console.Out.Flush();
 
             var commitReq = new msRequest { Cmd = msServiceCmd.CmdProgramCommit, ClientID = clientId, HandleID = chHandle, Index = programIndex };
+            foreach (var prop in addResp.Program.Properties)
+            {
+                commitReq.Properties.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
             var commitResp = client.sendRequest(commitReq, deadline: DateTime.UtcNow.AddSeconds(5));
             Console.WriteLine($"  ProgramCommit: Result={commitResp.Result}" +
                 (commitResp.HasErrMessage ? $" ErrMessage={commitResp.ErrMessage}" : ""));
@@ -292,20 +436,64 @@ namespace XHeadSender
                 return;
             }
 
-            Console.WriteLine($"  Opening source: {TestSourceFile}");
+            // Confirmed empirically: calling CmdChannelStart with no source ever attached crashes
+            // mnservice.exe natively, regardless of whether it's attempted before or after source
+            // setup otherwise begins (tried both). So: fully attach and start a source FIRST
+            // (Source/ProgramApply/SourceStart), and only call ChannelStart once that has
+            // succeeded. See docs/protocol/modulation_capabilities.md for the full history.
+            //
+            // SourceUrl (file) proved to be a dead end from the client side: CmdSourceOpen always
+            // returns before async Media Foundation probing finishes, and nothing (event or a
+            // second connection) ever delivers the resulting Content back to us -- see
+            // docs/protocol/modulation_capabilities.md "Source接続時の追加調査". SourceCapture is
+            // different: the underlying msCapture is a SHARED/global object (unlike per-session
+            // Sources), so a second connection's connectService snapshot *does* show its Content
+            // once CmdCaptureStart finishes. Use that here: open+start the desktop capture, peek
+            // its real Program/Stream layout from a second connection, then open a SourceCapture
+            // against it using that now-known layout.
+            msCapture desktopCap = null;
+            foreach (var cap in msClient.Captures)
+            {
+                if (cap.CaptureType == msCaptureType.Dxgidesktop) { desktopCap = cap; break; }
+            }
+            if (desktopCap == null)
+            {
+                Console.WriteLine("  No Dxgidesktop capture available -- aborting.");
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            Console.WriteLine($"  Using capture: {desktopCap.Name} HandleID={desktopCap.HandleID}");
+
+            client.sendRequest(new msRequest { Cmd = msServiceCmd.CmdCaptureOpen, ClientID = clientId, HandleID = desktopCap.HandleID }, deadline: DateTime.UtcNow.AddSeconds(8));
+            Thread.Sleep(3000);
+            var capStartResp = client.sendRequest(new msRequest { Cmd = msServiceCmd.CmdCaptureStart, ClientID = clientId, HandleID = desktopCap.HandleID }, deadline: DateTime.UtcNow.AddSeconds(8));
+            Console.WriteLine($"  CaptureStart: Result={capStartResp.Result}" + (capStartResp.HasErrMessage ? $" ErrMessage={capStartResp.ErrMessage}" : ""));
+            Thread.Sleep(2000);
+            var peekedCap = PeekCaptureViaSecondaryConnection(desktopCap.HandleID);
+            if (peekedCap == null || (peekedCap.Content?.Programs.Count ?? 0) == 0)
+            {
+                Console.WriteLine("  Capture has no probed content -- aborting.");
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            var capProgram = peekedCap.Content.Programs[0];
+            Console.WriteLine($"  Capture ready: Program ID={capProgram.ID} Streams={capProgram.Streams.Count}");
+            foreach (var s in capProgram.Streams) Console.WriteLine($"    Stream Index={s.Index} ID={s.ID} Format={s.Format}");
+            Console.Out.Flush();
+
+            var capParamForSource = new msCaptureParam();
+            foreach (var s in capProgram.Streams)
+            {
+                capParamForSource.Content.Add(new msCaptureParam.Types.Capture { HandleID = desktopCap.HandleID, ProgramID = capProgram.ID, StreamIndex = s.Index });
+            }
             var sourceOpenReq = new msRequest
             {
                 Cmd = msServiceCmd.CmdSourceOpen,
                 ClientID = clientId,
-                Source = new msSourceParam
-                {
-                    Mode = msSourceMode.SourceUrl,
-                    Name = "XHeadSenderSource",
-                    URL = new msURLParam { Url = TestSourceFile, Mode = msURLMode.Local }
-                }
+                Source = new msSourceParam { Mode = msSourceMode.SourceCapture, Name = "XHeadSenderCaptureSource", Capture = capParamForSource }
             };
             var sourceResp = client.sendRequest(sourceOpenReq, deadline: DateTime.UtcNow.AddSeconds(10));
-            Console.WriteLine($"  SourceOpen: Result={sourceResp.Result} ParamCase={sourceResp.ParamCase}" +
+            Console.WriteLine($"  SourceOpen(Capture): Result={sourceResp.Result} ParamCase={sourceResp.ParamCase}" +
                 (sourceResp.HasErrMessage ? $" ErrMessage={sourceResp.ErrMessage}" : ""));
             Console.Out.Flush();
             if (sourceResp.ParamCase != msResponse.ParamOneofCase.Source)
@@ -314,56 +502,34 @@ namespace XHeadSender
                 return;
             }
             var src = sourceResp.Source;
-            Console.WriteLine($"  Source: HandleID={src.HandleID} Status={src.Status} Mode={src.Mode} Programs={src.Content?.Programs.Count ?? 0}");
-            foreach (var p in src.Content?.Programs ?? new Google.Protobuf.Collections.RepeatedField<msContent.Types.Program>())
-            {
-                Console.WriteLine($"    Program ID={p.ID} Streams={p.Streams.Count}");
-                foreach (var s in p.Streams)
-                {
-                    Console.WriteLine($"      Stream Index={s.Index} ID={s.ID} Format={s.Format}");
-                }
-            }
+            Console.WriteLine($"  Source: HandleID={src.HandleID} Status={src.Status} Mode={src.Mode}");
+            Console.WriteLine("  Waiting for the source's own EventSourceStatus to reach StatusReady (up to 10s)...");
+            var finalStatus = watcher.WaitForStatusReady(src.HandleID, TimeSpan.FromSeconds(10));
+            Console.WriteLine($"  Source status after wait: {finalStatus?.Status} ContentPrograms={finalStatus?.Content?.Programs.Count ?? 0}");
             Console.Out.Flush();
 
-            // The GUI (xTaskStartChannel) polls source_.Status until StatusReady before applying
-            // content. EventSourceStatus (confirmed via mnClient.handleSource()) only ever carries
-            // a bare msStatus, never an updated Content -- so instead, open a second, independent
-            // (non-controller / PrivilegeDebug) connection and call connectService again: its
-            // response is a full state snapshot (msClient.Sources[]) that should reflect whatever
-            // mnservice has finished probing server-side, without disturbing our primary session.
-            if ((src.Content?.Programs.Count ?? 0) == 0)
+            // Use the SOURCE's own reported Program/Stream numbering (now that the EventStatus fix
+            // actually gives it to us), not the underlying Capture's -- they are different objects
+            // and may number things differently even if they usually happen to match.
+            if ((finalStatus?.Content?.Programs.Count ?? 0) == 0)
             {
-                Console.WriteLine("  Source not ready yet. Waiting ~10s for async probe, then peeking via a second connection...");
-                Thread.Sleep(10000);
-                var peeked = PeekSourceViaSecondaryConnection(src.HandleID);
-                if (peeked != null)
-                {
-                    Console.WriteLine($"  Peeked source: Status={peeked.Status} Programs={peeked.Content?.Programs.Count ?? 0}");
-                    src = peeked;
-                }
-                else
-                {
-                    Console.WriteLine("  Peek did not find the source.");
-                }
-            }
-
-            if ((src.Content?.Programs.Count ?? 0) == 0)
-            {
-                Console.WriteLine("  Source has no probed programs/streams -- aborting before ProgramApply.");
+                Console.WriteLine("  Source never reported Content -- aborting.");
                 CloseSource(client, clientId, src.HandleID);
                 CloseChannel(client, clientId, chHandle);
                 return;
             }
+            var srcProgram = finalStatus.Content.Programs[0];
+            Console.WriteLine($"  Source's own Program ID={srcProgram.ID} Streams={srcProgram.Streams.Count}");
+            foreach (var s in srcProgram.Streams) Console.WriteLine($"    Stream Index={s.Index} ID={s.ID} Format={s.Format}");
 
-            var program0 = src.Content.Programs[0];
             var content = new msMediaContent
             {
                 Index = 0,
                 SourceID = src.HandleID,
-                ProgramID = (uint)programIndex,
+                ProgramID = srcProgram.ID,
                 EngineID = msClient.Engines.Count > 0 ? msClient.Engines[0].HandleID : 0
             };
-            foreach (var s in program0.Streams)
+            foreach (var s in srcProgram.Streams)
             {
                 var contentStream = new msMediaContent.Types.Stream { Index = s.Index };
                 contentStream.Nodes.Add(new msMediaContent.Types.Node { Mode = msMediaContent.Types.NodeMode.NodePassthrough });
@@ -408,48 +574,52 @@ namespace XHeadSender
             }
             Console.Out.Flush();
 
-            // Full field set for mModulationParam, mirroring mnPropertiesParam.enumFields():
-            // every leaf (Number/Select) field at its current/default value, Constellation changed.
-            var modProp = new msPropertyParam { Name = "mModulationParam" };
-            modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 0, UintVal = 473000 });   // Frequency
-            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 1, IntVal = 1 });          // DacCtrl.IFMode = Disable
-            modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 2, UintVal = 0 });        // DacCtrl.IFFreq
-            modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 3, UintVal = 0 });        // DacCtrl.GAIN
-            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 19, IntVal = 1 });         // Constellation: QAM64(3) -> QPSK(1)
-            modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 20, UintVal = 6 });       // Bandwidth
-            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 21, IntVal = 1 });         // FFT = 8k
-            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 22, IntVal = 3 });         // CodeRate = CR_5_6
-            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 23, IntVal = 1 });         // GuardInterval = GI_1_16
-            modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 24, IntVal = 3 });         // TimeInterleavce = Mode3
-
-            var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
-            startReq.Properties.Add(modProp);
-            msResponse startResp;
-            try
+            if (sourceStartResp != null && sourceStartResp.Result == msResult.ResultSuccess)
             {
-                Console.WriteLine("  Calling ChannelStart now...");
+                // Full field set for mModulationParam, mirroring mnPropertiesParam.enumFields():
+                // every leaf (Number/Select) field at its current/default value, Constellation
+                // changed from the QAM64 default to QPSK as a visible/verifiable test.
+                var modProp = new msPropertyParam { Name = "mModulationParam" };
+                modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 0, UintVal = 473000 });   // Frequency
+                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 1, IntVal = 1 });          // DacCtrl.IFMode = Disable
+                modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 2, UintVal = 0 });        // DacCtrl.IFFreq
+                modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 3, UintVal = 0 });        // DacCtrl.GAIN
+                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 19, IntVal = 1 });         // Constellation: QAM64(3) -> QPSK(1)
+                modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 20, UintVal = 6 });       // Bandwidth
+                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 21, IntVal = 1 });         // FFT = 8k
+                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 22, IntVal = 3 });         // CodeRate = CR_5_6
+                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 23, IntVal = 1 });         // GuardInterval = GI_1_16
+                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 24, IntVal = 3 });         // TimeInterleavce = Mode3
+
+                var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
+                startReq.Properties.Add(modProp);
+                msResponse startResp;
+                try
+                {
+                    Console.WriteLine("  Source is running with real content attached. Calling ChannelStart now...");
+                    Console.Out.Flush();
+                    startResp = client.sendRequest(startReq, deadline: DateTime.UtcNow.AddSeconds(10));
+                    Console.WriteLine($"  ChannelStart: Result={startResp.Result} Status={startResp.Status} ParamCase={startResp.ParamCase}" +
+                        (startResp.HasErrMessage ? $" ErrMessage={startResp.ErrMessage}" : ""));
+                }
+                catch (RpcException ex)
+                {
+                    Console.WriteLine($"  ChannelStart RPC error: {ex.Status}");
+                    startResp = null;
+                }
                 Console.Out.Flush();
-                startResp = client.sendRequest(startReq, deadline: DateTime.UtcNow.AddSeconds(10));
-                Console.WriteLine($"  ChannelStart: Result={startResp.Result} Status={startResp.Status} ParamCase={startResp.ParamCase}" +
-                    (startResp.HasErrMessage ? $" ErrMessage={startResp.ErrMessage}" : ""));
-            }
-            catch (RpcException ex)
-            {
-                Console.WriteLine($"  ChannelStart RPC error: {ex.Status}");
-                startResp = null;
-            }
-            Console.Out.Flush();
 
-            if (startResp != null && startResp.Result == msResult.ResultSuccess)
-            {
-                Console.WriteLine("  Channel started successfully! Waiting 5s (check RTL-SDR now) before stopping...");
-                Console.Out.Flush();
-                System.Threading.Thread.Sleep(5000);
-
-                var stopReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };
-                var stopResp = client.sendRequest(stopReq, deadline: DateTime.UtcNow.AddSeconds(5));
-                Console.WriteLine($"  ChannelStop: Result={stopResp.Result}");
+                if (startResp != null && startResp.Result == msResult.ResultSuccess)
+                {
+                    Console.WriteLine("  *** Channel started successfully with real content! Check RTL-SDR now. Waiting 8s... ***");
+                    Console.Out.Flush();
+                    Thread.Sleep(8000);
+                }
             }
+
+            var stopChReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };
+            var stopChResp = client.sendRequest(stopChReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ChannelStop: Result={stopChResp.Result}");
 
             var sourceStopReq = new msRequest { Cmd = msServiceCmd.CmdSourceStop, ClientID = clientId, HandleID = src.HandleID };
             client.sendRequest(sourceStopReq, deadline: DateTime.UtcNow.AddSeconds(5));
@@ -494,6 +664,42 @@ namespace XHeadSender
             catch (RpcException ex)
             {
                 Console.WriteLine($"  [peek] RPC error: {ex.Status}");
+                return null;
+            }
+            finally
+            {
+                peekChannel.ShutdownAsync().Wait();
+            }
+        }
+
+        /// <summary>Same idea as PeekSourceViaSecondaryConnection, but for Captures, which are
+        /// shared/global (visible to every connection) rather than session-private like Sources.</summary>
+        private static msCapture PeekCaptureViaSecondaryConnection(uint captureHandle)
+        {
+            var peekChannel = new Channel(ServiceAddress, ChannelCredentials.Insecure);
+            var peekClient = new msBroadcastService.msBroadcastServiceClient(peekChannel);
+            try
+            {
+                var req = new msRequest
+                {
+                    Cmd = msServiceCmd.CmdConnect,
+                    ClientID = 0,
+                    Client = new msClientParam { Name = "XHeadSenderPeekCap", Privilege = msPrivilege.PrivilegeDebug }
+                };
+                var resp = peekClient.connectService(req, deadline: DateTime.UtcNow.AddSeconds(5));
+                if (resp.Result != msResult.ResultSuccess || resp.ParamCase != msResponse.ParamOneofCase.Client) return null;
+                msCapture found = null;
+                foreach (var c in resp.Client.Captures)
+                {
+                    if (c.HandleID == captureHandle) found = c;
+                }
+                var disc = new msRequest { Cmd = msServiceCmd.CmdDisconnect, ClientID = resp.Client.HandleID };
+                peekClient.disconnectService(disc, deadline: DateTime.UtcNow.AddSeconds(5));
+                return found;
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  [peek-cap] RPC error: {ex.Status}");
                 return null;
             }
             finally

@@ -137,6 +137,66 @@ gRPC接続そのものが切断され(`Stream removed`)、プロセスが完全�
 ケース検知後の長時間待機、別クライアント接続からの覗き見）はいずれもクラッシュを引き起こさず、
 実機・サービスは全過程を通じて健全な状態を維持した。
 
+### 続報 (2026-07-25): EventSourceStatusは実はContentを運んでいた
+
+上記の「イベントはStatusのみでContentを運ばない」という結論は**誤りだった**。原因はデコンパイル
+済みクライアント側の型読み違えにある。
+
+- `msEvent.Status` フィールドの型は生の `msStatus` ではなく **`msEventStatus`というラッパー
+  メッセージ**であり、`Status`(msStatus)に加えて **`Content`(msContent)フィールドを oneofで
+  持つ**。
+- 公式GUIの `mnClient.handleSource()` は `item.Status.Status` だけを読んで
+  `mnSource.updateStatus()` に渡し、`item.Status.Content` を一切参照していない（ラッパー
+  クラス`mnSource`側にContent更新用のコードパスが無いため、結果的に握りつぶされる）。この
+  ラッパーの実装だけを読んで「イベントはContentを運ばない」と判断したのが誤りの原因。
+- 実際に生の `ev.Status.Content` を読むよう自作ツールを修正したところ、**`EventSourceStatus`
+  （Source用）・`EventCaptureStatus`（Capture用）とも、Ready到達時に実際にProgram/Streamの
+  完全な情報を運んでいる**ことを確認した。
+
+これにより、Source接続時の「Content取得問題」は解決した。正しい待受け方法は`subscribeService`
+のイベントストリームで対象HandleIDの`EventXxxStatus`を待ち、届いた`msEvent.Status.Content`
+（`ev.Status`, `msEventStatus`型）を直接読むこと。別クライアント接続からの覗き見（Captureのみ
+機能する）は不要になった。
+
+### Capture経由のSource接続は成功、ChannelStartへの接続がまだ未解決
+
+デスクトップキャプチャ（`Dxgidesktop`, RAW_RGB 1920x1080@60fps）を使い、以下の手順まで
+`ResultSuccess`で到達することを確認した:
+
+```
+CmdChannelOpen → CmdProgramAdd → CmdProgramCommit
+→ CmdCaptureOpen → (Readyまで待機) → CmdCaptureStart
+→ CmdSourceOpen(Mode=SourceCapture, 実際に判明したCapture Program/Streamを参照)
+→ (EventSourceStatusでStatusReady + Content取得を確認)
+```
+
+しかし直後の **`CmdProgramApply`が一貫して`FAILED_PRECONDITION: bad status`で失敗**する。
+試して除外した仮説:
+
+- Source/CaptureのProgramID・StreamIndexの不一致 → 一致していることを確認済み、無関係
+- `CmdProgramCommit`にProgram側のPropertiesを渡し忘れている → `CmdProgramAdd`の応答は
+  そもそも`Properties`が0件で、渡すものが無い
+- 順序が逆（`ChannelStart`を先に呼ぶべき） → 試したところ、Source未接続のまま
+  `ChannelStart`を呼ぶ形になり**再現性を持ってクラッシュ**した（`Stream removed`で
+  mnservice.exeプロセスごと終了。実機には無害、再起動で復帰）
+
+`mnservice.exe`本体から文字列抽出したところ、`bad status`という応答は`mnbridge.cc`内の汎用
+コマンドディスパッチャが返す複数の類似メッセージの一つで（`unhandled command`,
+`bad status : [%d]`, `object bad status : [%08x]`等と同じ関数群に隣接）、直前には
+`service broadcast bad status  already start.` という文字列がある（サービス全体で一つの
+放送状態を管理していることを示唆）。近傍には `program already connect` /
+`program[%d] already commit` / `program not committed` / `channel already connected` /
+`channel not connected` という一連の状態文字列があり、`CmdProgramApply`が要求する前提条件
+（チャンネル/プログラムの「connected」「committed」状態）をまだ正しく満たせていないと推測
+されるが、具体的にどの条件かは文字列抽出だけでは特定できず、**この先はGhidra/IDA等による
+ディスアセンブルが必要**という結論に達した。
+
+自作ツール (`tools/custom_sender/Program.cs`) には、この一連の調査で実装した以下の再利用可能な
+基盤が残っている: `EventWatcher`(購読イベントの背景処理・Content付きStatus待受け)、
+`PeekCaptureViaSecondaryConnection`(共有オブジェクトの別接続からの参照)、Capture経由Sourceの
+完全なオープン手順。次回はここから`CmdProgramApply`前提条件の特定（またはネイティブ解析）を
+再開できる。
+
 ## 取得方法（再現手順）
 
 ```
