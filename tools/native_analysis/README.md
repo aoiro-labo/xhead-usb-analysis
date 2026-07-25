@@ -46,6 +46,14 @@ analyzeHeadless.bat <projectDir> <projectName> -process mnservice.exe -noanalysi
   2段階を実装済み）。インポート関数のサンクがvtable/関数ポインタテーブル経由でしか
   呼ばれていない場合は、`getReferencesTo`が0件を返す（`ReferenceType`が`DATA`になっている
   はず）ので、その場合はcdbでのライブブレークポイント（後述）に切り替えるのが早い。
+- `XHeadFindAllBRequests.java` — 特定の「共通ヘルパー関数」（例:
+  1個の`bRequest`定数を引数で受け取ってUSBベンダーコマンドを1回発行する下請け関数）への
+  全呼び出し元を洗い出し、まとめてデコンパイルする。1回のライブキャプチャで観測できるのは
+  実行時にたまたま通ったコードパスだけなので、**バイナリ全体を静的に検索して初めて全種類の
+  コマンド（例: 読み出し専用/書き込み専用/単発/ブロック転送、等）が出揃う**、という場面で
+  有効。実際にこの手法でXHEAD-USBのUSBベンダーコマンドが「アドレス設定→データ読み書き」の
+  汎用レジスタバスだと判明した（詳細は
+  [tools/usb_capture/README.md](../usb_capture/README.md)）。
 
 ## cdbでの動的解析（ライブブレークポイント）
 
