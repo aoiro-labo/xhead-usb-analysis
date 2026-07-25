@@ -17,7 +17,7 @@
 | 実機からの変調パラメータ確定（FieldID・許容値） | 完了 | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) |
 | 独自送出ツール: 読み取り（プロパティツリーのダンプ） | 完了 | `tools/custom_sender` |
 | 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 完了 | `ChannelOpen`→`ProgramAdd/Commit`→**`ChannelStart`(Source構築前・全プロパティ群込み)**→`Source`構築→`ProgramApply`→`SourceStart`という正しいアーキテクチャを特定。値の変更（Constellation・RF電力のPAGain/DACGain）が実際に物理層まで反映されることもネイティブログで実証済み |
-| RTL-SDRループバックでの実信号検証 | 未着手（着手可能） | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出パイプラインは値変更込みで動作確認済みなのでいつでも着手できる |
+| RTL-SDRループバックでの実信号検証 | 完了 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出前後で470〜476MHz帯（6MHz幅、ISDB-Tの帯域幅と一致）に約38dBのパワー上昇を実測、送出停止で消失することも確認。設定した中心周波数473MHzとも一致 |
 | `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 未着手 | [tools/usb_capture](tools/usb_capture) |
 
 ## クイックリンク
