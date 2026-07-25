@@ -30,6 +30,15 @@ namespace XHeadDirectUsb
         private const byte BM_HOST_TO_DEVICE_VENDOR_DEVICE = 0x40;
         private const byte BM_DEVICE_TO_HOST_VENDOR_DEVICE = 0xC0;
 
+        // Confirmed via USBPcap capture (tools/usb_capture/README.md): bulk OUT endpoint address 0x01.
+        // WinUSB pipe IDs are the raw endpoint address byte, so this is usable directly with WinUsb_WritePipe.
+        private const byte PIPE_ID_BULK_OUT = 0x01;
+
+        // mslicebuffer.cc's own logged slice geometry: 24064 bytes = 128 x 188-byte MPEG-TS packets.
+        private const int SLICE_SIZE_BYTES = 24064;
+        private const int TS_PACKET_SIZE = 188;
+        private const int TS_PACKETS_PER_SLICE = SLICE_SIZE_BYTES / TS_PACKET_SIZE;
+
         private static SafeFileHandle _fileHandle;
         private static IntPtr _winusbHandle = IntPtr.Zero;
 
@@ -37,6 +46,7 @@ namespace XHeadDirectUsb
         {
             bool writeMode = false;
             bool configureMode = false;
+            bool streamMode = false;
             ushort? writeAddr = null;
             uint? writeData = null;
 
@@ -48,6 +58,7 @@ namespace XHeadDirectUsb
             uint guardinterval = 1;
             uint timeinterleave = 3;
             int dacgain = -10;
+            int streamSeconds = 3;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -55,6 +66,8 @@ namespace XHeadDirectUsb
                 else if (args[i] == "--addr") writeAddr = Convert.ToUInt16(args[++i], 16);
                 else if (args[i] == "--data") writeData = Convert.ToUInt32(args[++i], 16);
                 else if (args[i] == "--configure") configureMode = true;
+                else if (args[i] == "--stream") streamMode = true;
+                else if (args[i] == "--seconds") streamSeconds = Convert.ToInt32(args[++i]);
                 else if (args[i] == "--freq") freqKHz = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--constellation") constellation = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--bandwidth") bandwidth = Convert.ToUInt32(args[++i]);
@@ -67,6 +80,7 @@ namespace XHeadDirectUsb
 
             Console.WriteLine("=== XHeadDirectUsb: raw WinUSB register-bus probe (bypasses mnservice.exe) ===");
             Console.WriteLine(writeMode ? "Mode: WRITE (explicit --write given)" :
+                streamMode ? "Mode: CONFIGURE + STREAM (bulk-OUT null-TS payload after full ChannelStart replay)" :
                 configureMode ? "Mode: CONFIGURE (full ChannelStart write-sequence replay, bypasses mnservice.exe entirely)" :
                 "Mode: READ-ONLY (default, safe)");
             Console.Out.Flush();
@@ -80,7 +94,12 @@ namespace XHeadDirectUsb
 
             try
             {
-                if (configureMode)
+                if (streamMode)
+                {
+                    RunConfigureSequence(freqKHz, constellation, bandwidth, fft, coderate, guardinterval, timeinterleave, dacgain);
+                    RunStreamTest(streamSeconds);
+                }
+                else if (configureMode)
                 {
                     RunConfigureSequence(freqKHz, constellation, bandwidth, fft, coderate, guardinterval, timeinterleave, dacgain);
                 }
@@ -237,6 +256,66 @@ namespace XHeadDirectUsb
                 Console.Out.Flush();
                 Thread.Sleep(20);
             }
+        }
+
+        /// <summary>
+        /// Sends a burst of synthetic null-TS-packet slices over the bulk OUT endpoint, WITHOUT
+        /// replicating the periodic 0x4A/0x4E flow-control notify/readback pair that mnservice.exe
+        /// interleaves with real streaming (tools/usb_capture/README.md "続報"/"続報2" -- that
+        /// notify's exact address-encoding semantics aren't fully understood yet). This is a
+        /// deliberately narrow experiment: does bulk-OUT payload alone (on top of the register
+        /// configuration already sent by RunConfigureSequence) change anything observable, or does
+        /// the device require the notify handshake before it treats bulk data as real? Either
+        /// answer is informative; see tools/direct_usb/README.md for the result once run.
+        /// Packets use the standard MPEG-TS "null packet" convention (PID=0x1FFF) so any real ISDB-T
+        /// demux downstream would recognize them as stuffing rather than malformed data.
+        /// </summary>
+        private static void RunStreamTest(int seconds)
+        {
+            Console.WriteLine($"  Streaming synthetic null-TS slices over bulk OUT (pipe 0x{PIPE_ID_BULK_OUT:X2}) for {seconds}s...");
+            Console.Out.Flush();
+
+            byte[] slice = BuildNullTsSlice();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            long slicesSent = 0;
+            long bytesSent = 0;
+
+            while (sw.Elapsed.TotalSeconds < seconds)
+            {
+                uint transferred;
+                bool ok = WinUsb_WritePipe(_winusbHandle, PIPE_ID_BULK_OUT, slice, (uint)slice.Length, out transferred, IntPtr.Zero);
+                if (!ok)
+                {
+                    int err = Marshal.GetLastWin32Error();
+                    Console.WriteLine($"  WinUsb_WritePipe failed after {slicesSent} slices, Win32 error 0x{err:X} ({err}). Stopping stream test.");
+                    return;
+                }
+                slicesSent++;
+                bytesSent += transferred;
+            }
+
+            Console.WriteLine($"  Stream test done: {slicesSent} slices / {bytesSent} bytes sent in {sw.Elapsed.TotalSeconds:F1}s, no pipe errors.");
+            Console.Out.Flush();
+        }
+
+        private static byte[] BuildNullTsSlice()
+        {
+            byte[] slice = new byte[SLICE_SIZE_BYTES];
+            byte cc = 0;
+            for (int p = 0; p < TS_PACKETS_PER_SLICE; p++)
+            {
+                int off = p * TS_PACKET_SIZE;
+                slice[off + 0] = 0x47;                     // sync byte
+                slice[off + 1] = 0x1F;                     // TEI=0, PUSI=0, priority=0, PID[12:8]=0x1F
+                slice[off + 2] = 0xFF;                      // PID[7:0] -> PID=0x1FFF (standard null packet)
+                slice[off + 3] = (byte)(0x10 | (cc & 0x0F)); // no scrambling, payload-only, continuity counter
+                for (int b = 4; b < TS_PACKET_SIZE; b++)
+                {
+                    slice[off + b] = 0xFF;                  // standard null-packet stuffing payload
+                }
+                cc = (byte)((cc + 1) & 0x0F);
+            }
+            return slice;
         }
 
         private static void SetAddress(ushort addr)
@@ -454,6 +533,10 @@ namespace XHeadDirectUsb
 
         [DllImport("winusb.dll", SetLastError = true)]
         private static extern bool WinUsb_ControlTransfer(IntPtr interfaceHandle, RawSetupPacket setupPacket,
+            byte[] buffer, uint bufferLength, out uint lengthTransferred, IntPtr overlapped);
+
+        [DllImport("winusb.dll", SetLastError = true)]
+        private static extern bool WinUsb_WritePipe(IntPtr interfaceHandle, byte pipeId,
             byte[] buffer, uint bufferLength, out uint lengthTransferred, IntPtr overlapped);
     }
 
