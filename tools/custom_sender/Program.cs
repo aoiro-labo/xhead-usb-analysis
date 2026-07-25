@@ -490,6 +490,15 @@ namespace XHeadSender
             SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 0, v => v.UintVal = 90);
             SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 1, v => v.IntVal = 2);
             SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 2, v => v.IntVal = -10);
+            // Tried a marker-value test on mMTSChannelParam.RegionID (FieldID=4, default 23,
+            // range 0..63) on 2026-07-26 to see whether it lands on any of the still-unidentified
+            // stable registers (0x0601/0x0602/0x0640-0x0642/0x0680-0x0683). Result: it did NOT
+            // appear anywhere in the register-bus write capture at all -- RegionID (and, by
+            // implication, likely all of mMTSChannelParam) is not written to the modulator's
+            // register bus, consistent with it being a TS/PSI-SI multiplexing parameter handled
+            // entirely in software rather than a hardware modulation setting. See
+            // tools/usb_capture/README.md "続報8" for the full writeup. Reverted here to the
+            // known-good baseline.
             Console.WriteLine("  Overriding before ChannelStart: mModulationParam.Constellation=QPSK(1), " +
                 "mPSRFPowerAdjust.Level=90/PAGain=2/DACGain=-10 (473000kHz table entry)");
             Console.Out.Flush();
