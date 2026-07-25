@@ -54,6 +54,14 @@ analyzeHeadless.bat <projectDir> <projectName> -process mnservice.exe -noanalysi
   有効。実際にこの手法でXHEAD-USBのUSBベンダーコマンドが「アドレス設定→データ読み書き」の
   汎用レジスタバスだと判明した（詳細は
   [tools/usb_capture/README.md](../usb_capture/README.md)）。
+- `XHeadFindWriteCallers.java` — `XHeadFindAllBRequests.java`と同系統だが、対象を
+  複数指定して一括で呼び出し元を洗い出す版（単発/ブロック × 読み出し/書き込みの4関数を
+  まとめて処理）。呼び出し元が0件（vtable経由）だった場合は、cdbライブブレークポイントに
+  切り替える判断材料として使う。
+- `XHeadDecodeRfPowerWriter.java` — cdbのライブキャプチャで得た「呼び出し元のRetAddr」群を
+  まとめてデコンパイルする版（`XHeadProgramApplyStack.java`と似ているが、複数の異なる
+  呼び出し元候補を一度に確認する用途）。この手法でPAGain/DACGain書き込みの実装
+  （`FUN_14039ba70`）を特定できた。
 
 ## cdbでの動的解析（ライブブレークポイント）
 
@@ -81,6 +89,15 @@ analyzeHeadless.bat <projectDir> <projectName> -process mnservice.exe -noanalysi
 起動後、別ターミナルから`tools/custom_sender`のテストツールを実行して対象コードパスを踏ませる。
 ブレーク時の`kb 15`（コールスタック）が`.logopen`で指定したログファイルに記録される。
 オフセット群が判明したら`XHeadProgramApplyStack.java`でまとめてデコンパイルする。
+
+**Tips**: 引数を直接読みたい関数（例:「アドレス」「データ」を引数で受け取るヘルパー関数）が
+分かっている場合は、`db rdx L18`のような生メモリダンプで16進を手動デコードするより、
+ブレークポイントコマンドで`r rcx; r r8; r r9`のようにレジスタを直接ダンプする方が
+圧倒的に速く読みやすい（x64 Windows呼び出し規約: 第1引数=rcx, 第2引数=rdx, 第3引数=r8,
+第4引数=r9）。実際に`FUN_140088500(this, status_out, address, data)`という4引数の
+ヘルパーに対して`bu mnservice+0x88500 "r rcx; r r8; r r9; kb 10; g"`のようなブレークポイントを
+張ることで、アドレス・データのペアを直接、手動hexデコードなしで取得できた
+（[tools/usb_capture/README.md](../usb_capture/README.md)「続報5」）。
 
 ### オブジェクトの実行時の型を知る（MSVC RTTI手動解決）
 
