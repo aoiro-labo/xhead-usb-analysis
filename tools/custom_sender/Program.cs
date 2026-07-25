@@ -482,6 +482,10 @@ namespace XHeadSender
             // Level -- setting Level alone without the matching PAGain/DACGain does nothing.
             // Frequency 473000kHz -> RFPower473 table; Level=90 -> index (90-80)=10 ->
             // PowerGain(PAGain=2, DACGain=-10).
+            // Tried switching Mode away from ISDB_T (see docs/protocol/modulation_capabilities.md
+            // and tools/usb_capture/README.md for the full writeup) -- server rejected it cleanly
+            // with "field [Constellation] not exists" before ever touching hardware. Reverted to
+            // the known-working ISDB_T path.
             SetPropertyValue(channelStartProps, "mModulationParam", 19, v => v.IntVal = 1);
             SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 0, v => v.UintVal = 90);
             SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 1, v => v.IntVal = 2);
@@ -851,6 +855,18 @@ namespace XHeadSender
             var group = props.First(p => p.Name == groupName);
             var variant = group.Values.First(v => v.FieldID == fieldId);
             setter(variant);
+        }
+
+        /// <summary>
+        /// Appends a brand-new msVariant (by group name + FieldID) to an echoed-back property
+        /// list. Needed for Mode-specific fields (e.g. DVB_T's own Constellation/Bandwidth/etc,
+        /// FieldIDs 5-9) that the server never echoes back while Mode=ISDB_T is active, so
+        /// SetPropertyValue's lookup would find nothing to mutate.
+        /// </summary>
+        private static void AddPropertyValue(List<msPropertyParam> props, string groupName, msVariant variant)
+        {
+            var group = props.First(p => p.Name == groupName);
+            group.Values.Add(variant);
         }
 
         private static void DumpProperty(msProperty prop, int indent)

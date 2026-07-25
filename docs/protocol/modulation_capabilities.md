@@ -398,7 +398,42 @@ mpegasys_output.cc:260] adjust power : [f6:02]
 約38dBのパワー上昇を実測、送出停止で消失することも確認）。残るはビットレベルでの検証
 （フルOFDM復調、または市販チューナーでのTS直接受信）のみ。
 
-## 取得方法（再現手順）
+### 続報6 (2026-07-25): ISDB-T以外のMode切替を試行 → サーバー側検証で安全に拒否された
+
+`Mode`セレクタが持つ8つの選択肢（DVB_T/J83A/ATSC/J83B/DTMB/ISDB_T/J83C/DVB_T2）のうち、
+ISDB_T以外が実際に使えるのか（＝変調チップが本当に多規格対応なのか、それとも
+ワイヤプロトコル上の記述だけが多規格分残っていて実態は未実装なのか）を、
+Ghidraでの静的解析とライブテストの両方で確認した。
+
+**静的解析（事実）**: `mnservice.exe`内に`ATSC`/`J83A`〜`J83C`/`DTMB`/`QAM16`等の文字列は
+確かに存在し、複数の関数から参照されている。ただしこれらは以前見た「プロパティ記述子
+（`msDescriptor`/`msPropertyRange`）を組み立てて選択肢一覧をGUIに見せる」コードパターンと
+一致しており、**「実際にハードウェアへ設定を反映するコードが存在する証拠」にはならない**
+（GUIに選択肢を表示するためだけの文字列である可能性が高い）。
+
+**ライブテスト（事実、ユーザー承認の上で実施、実機無害を確認済み）**: `mModulationParam.Mode`
+を`DVB_T`(0)に切り替え、DVB_T用の固有フィールド（ISDB_Tとは別のFieldID: Constellation=5,
+Bandwidth=6, FFT=7, CodeRate=8, GuardInterval=9）にそれぞれの規格のデフォルト値を設定して
+`CmdChannelStart`を実行したところ、**ハードウェアには一切触れずサーバー側のプロパティ
+検証層で安全に拒否された**:
+
+```
+ChannelStart(early): Result=ResultFailStatus Status=StatusOffline ParamCase=ErrMessage
+  ErrMessage=property[mModulationParam] field [Constellation] not exists
+```
+
+クラッシュなし、実機は健全なまま（`mnservice.exe`プロセスも生存継続）。安全性の面では
+理想的な結果だった。
+
+**結論と限界（事実+推測を明記）**: **事実**として、少なくとも今回試した素朴な送信方法
+（`Mode`フィールドを書き換え、Mode固有フィールドをフラットな`Values`リストへ追加する方式）
+では拒否された。**推測**として、これが「ハードウェア/ファームウェアが本当にISDB_T以外
+未実装」なのか、「`Mode`がタグ付きユニオン型（`FieldConstSelect`、`IsSubGroup=True`）で
+あることを踏まえた正しい送信フォーマットになっていなかった」だけなのかは、この結果だけ
+では判別できない。エラーメッセージがフィールド名ベースの検証失敗である点から見て、
+後者（送信フォーマットの問題）の可能性も十分残っている。これ以上の深掘りには
+`FieldConstSelect`型の正しいワイヤ表現を静的に調べる必要があり、少なくとも
+**現状ではISDB-T以外への切替は実証できていない**、というのが正直な到達点。
 
 ```
 # xhead_studio.exe を終了した状態で、mnservice.exe を単体起動
