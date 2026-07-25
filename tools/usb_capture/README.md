@@ -27,6 +27,36 @@ gRPC (`docs/protocol/`) はあくまで **PC内の GUI⇔サービス間** の�
     `Status=StatusOffline` が返り、実機非接続状態と整合する。
 - Wireshark + USBPcap はインストール済み (`C:\Program Files\Wireshark`, `C:\Program Files\USBPcap`)。
 
+## 試行結果 (2026-07-25): USBPcapでは実データが見えなかった【未解決】
+
+`tshark`（管理者権限で実行、`IsInRole(Administrator)`で確認済み）で`\\.\USBPcap3`
+（実機が列挙されているルートハブ、`usb.device_address == 19`で確認）を対象に、
+`mnservice.exe`をキャプチャ開始後に再起動→自作ツールでフル送出パイプラインを実行、
+という手順を2回試したが、**実機（アドレス`3.19`）に対する実データ転送は一切キャプチャ
+できなかった**。捕捉できたのは`GET DESCRIPTOR`/`SET CONFIGURATION`の6パケットのみで、
+これはキャプチャ開始時に接続済みの**全USBデバイスに対して一律に**発生する合成/注入
+パケット（`USBPcapCMD.exe --inject-descriptors`と同種の挙動、アドレス1〜19の全デバイスで
+全く同じ6パケットパターンが確認できた）であり、実際のI/Oではないと判明した。
+
+同じキャプチャ内で他のデバイス（TI製USBオーディオ`0x056e`等、Elecom製`0x056e`等）は
+数万パケット規模の実トラフィックが正常に見えていたため、USBPcap自体やルートハブの選択が
+根本的に間違っているわけではなさそうである。実機のGET DESCRIPTOR CONFIGURATIONレスポンスを
+デコードしたところ、`bEndpointAddress 0x81`(BULK IN)と`0x01`(BULK OUT)の2エンドポイントが
+`bmAttributes 0x02`（BULK転送）で存在することを確認しており、USBPcapが苦手とすることで
+知られるIsochronous転送が原因という説も否定される。管理者権限も確認済みなので、それも
+原因ではない。
+
+一方で、RTL-SDRループバック検証（[tools/rtlsdr_analysis](../rtlsdr_analysis)）では
+`Constellation`/`Bandwidth`/`RF電力`の変更が実際にスペクトラム上へ反映されることを確認して
+おり、**mnservice.exeが実機と何らかの形で通信していること自体は確実**。USBPcapで見えない
+理由は未解決（`WinUsb_ReadPipe`/`WinUsb_WritePipe`のI/Oパターンとの相性、または別の捕捉手法
+が必要な可能性）。次に試すなら:
+
+- Microsoftの`pktmon`（Windows標準のパケット監視、USB向け拡張がある場合）
+- ハードウェアUSBプロトコルアナライザ（Total Phase Beagle等）
+- `mnservice.exe`側をGhidra/cdbで直接調べ、`WinUsb_*`呼び出し箇所にブレークポイントを張って
+  送信バッファの中身をメモリダンプで直接読む（キャプチャツールを介さない方法）
+
 ## キャプチャ手順（案）
 
 1. Wireshark を管理者権限で起動。
