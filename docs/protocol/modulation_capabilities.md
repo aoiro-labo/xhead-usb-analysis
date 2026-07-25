@@ -197,6 +197,49 @@ CmdChannelOpen → CmdProgramAdd → CmdProgramCommit
 完全なオープン手順。次回はここから`CmdProgramApply`前提条件の特定（またはネイティブ解析）を
 再開できる。
 
+### 続報2 (2026-07-25): mnservice.exeの逆アセンブルで前提条件を特定
+
+`pefile` + `capstone`（Pythonで利用可能）を使い、`mnservice.exe`から直接、`bad status`文字列への
+参照を静的解析した。手法: `.rdata`内の対象文字列群のRVAを特定 → `.text`全体を線形disasm
+（`skipdata=True`で非コード領域をスキップしつつ再同期）→ `lea reg, [rip+disp]`命令で
+当該RVAを指しているものを検索。
+
+結果、`bad status` / `channel not connected` / `program not committed` / `channel already
+connected` / `program already connect` / `program[%d] already commit` / `program invalid` が
+すべて **0x140025921〜0x14002bace（約20KB、`mnbridge.cc`内と推定）** という単一の領域に密集して
+いることを確認した。これはChannel/Program系コマンド（Open/Close/Commit/Apply等）のハンドラ群が
+まとまって実装されていることを裏付ける。
+
+このうち最初の`bad status`分岐（0x140025921）を生む条件分岐を特定した:
+
+```asm
+0x14002580b: cmp dword ptr [rbp+0x58], 3
+0x14002580f: jne 0x140025921        ; not-equalなら "bad status" へ
+0x140025815: ...                    ; 続行パス: 3つの子構造体を順に処理
+  lea rcx, [rbp+0x47a8] / mov rdx, rdi / call 0x140031490
+  lea rcx, [rbp+0x4528] / mov rdx, rdi / call 0x1400280d0
+  lea rcx, [rbp+0x4a28] / mov rdx, rdi / call 0x140034 0a0
+0x14002591f: jmp 0x140025981        ; 成功時、エラーブロックを飛び越す
+```
+
+`3`は`msStatus.StatusReady`の数値と一致する。ただし`[rbp+0x58]`が具体的に何のオブジェクトの
+どのフィールドかは、関数のプロローグ (`0x1400257b0`, 引数: `rcx→rbp`, `rdx→rsi`, `r8→rdi`)
+だけからは断定できなかった。以下を検証し、「チャンネル自身が非同期にReadyへ遷移するのを待てば
+良い」という仮説は**否定した**: `CmdProgramCommit`成功後に15秒待っても対象チャンネルの
+`EventChannelStatus`は一度も発火しなかった（全テスト履歴を通じて一度も観測されていない）。
+したがって`[rbp+0x58]`はチャンネルの`status_`ではなく、**リクエスト/Content構造体側の
+未設定フィールド**（例: 送っていない`msMediaContent.Param`(`msMediaParam.Functions`)や、
+Streamごとのフォーマット情報等）である可能性の方が高いと考えられる。
+
+この関数呼び出し自体（`ChannelStart`を先に呼んでクラッシュした件）とは**別の場所**である点にも
+注意。クラッシュは`[rbp+0x58]`チェックが失敗を返すだけの本経路ではなく、Source/Content未接続の
+まま実際に処理を進めようとする別のコードパスで発生していると考えられる。
+
+**次回への引き継ぎ**: `msMediaContent.Param`に`msMediaParam{Functions=MediaNone}`を明示的に
+設定して再試行したが、結果は変わらず同じ`bad status`だった（この仮説は否定）。`rbp`(第1引数)の
+実体を特定するには、この関数の呼び出し元（0x1400257b0を呼んでいる箇所）を辿るか、Ghidra等で
+型復元を行うのが確実な近道。ブラックボックス試行はここで一区切りとした。
+
 ## 取得方法（再現手順）
 
 ```

@@ -430,6 +430,17 @@ namespace XHeadSender
             Console.WriteLine($"  ProgramCommit: Result={commitResp.Result}" +
                 (commitResp.HasErrMessage ? $" ErrMessage={commitResp.ErrMessage}" : ""));
             Console.Out.Flush();
+
+            // Native disassembly of mnservice.exe found the exact precondition ProgramApply
+            // checks: `cmp dword ptr [obj+0x58], 3 ; jne bad_status` -- 3 == msStatus.StatusReady.
+            // Never observed an EventChannelStatus in any prior run; check whether the channel
+            // itself asynchronously reaches StatusReady if given enough time after ProgramCommit
+            // (mirroring the Source/Capture Prepare->Ready pattern) before we ever try ProgramApply.
+            Console.WriteLine("  Watching for the CHANNEL's own status event for 15s (never observed one before)...");
+            var chStatus = watcher.WaitForStatusReady(chHandle, TimeSpan.FromSeconds(15));
+            Console.WriteLine($"  Channel status after wait: {chStatus?.Status.ToString() ?? "(no event received)"}");
+            Console.Out.Flush();
+
             if (commitResp.Result != msResult.ResultSuccess)
             {
                 CloseChannel(client, clientId, chHandle);
@@ -525,6 +536,7 @@ namespace XHeadSender
             var content = new msMediaContent
             {
                 Index = 0,
+                Param = new msMediaParam { Functions = msMediaFunction.MediaNone },
                 SourceID = src.HandleID,
                 ProgramID = srcProgram.ID,
                 EngineID = msClient.Engines.Count > 0 ? msClient.Engines[0].HandleID : 0
