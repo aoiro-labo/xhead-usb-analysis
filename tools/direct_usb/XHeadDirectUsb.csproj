@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    mnservice.exe を経由せず、XHEAD-USB 実機に WinUSB 経由で直接コントロール転送を送る
+    診断専用ツール。tools/usb_capture・tools/native_analysis で解読した「アドレス設定
+    (0x4A) → 読み出し(0x4E)/書き込み(0x4F)」の生レジスタバスプロトコルを、公式スタック
+    (mnservice.exe側のプロパティ検証層)を介さずに直接叩く。
+
+    安全のため既定は読み取り専用。書き込みには明示的なフラグ(write)が必要。
+    実行前に mnservice.exe を停止しておくこと（WinUSBインターフェースの排他所有のため）。
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>XHeadDirectUsb</RootNamespace>
+    <AssemblyName>XHeadDirectUsb</AssemblyName>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+
+</Project>

@@ -19,6 +19,7 @@
 | 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 完了 | `ChannelOpen`→`ProgramAdd/Commit`→**`ChannelStart`(Source構築前・全プロパティ群込み)**→`Source`構築→`ProgramApply`→`SourceStart`という正しいアーキテクチャを特定。値の変更（Constellation・RF電力のPAGain/DACGain）が実際に物理層まで反映されることもネイティブログで実証済み |
 | RTL-SDRループバックでの実信号検証 | 完了 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出前後で470〜476MHz帯（6MHz幅、ISDB-Tの帯域幅と一致）に約38dBのパワー上昇を実測、送出停止で消失することも確認。設定した中心周波数473MHzとも一致 |
 | `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 検証中 | [tools/usb_capture](tools/usb_capture) — バルク転送(24064バイト=MPEG-TS 188バイト×128、224スライスのリングバッファ)の生TSフレーミングを確認。コントロール転送は`mhal_modulation.cc`が使う「アドレス設定→データ読み書き」の汎用レジスタバスと判明。**ISDB-T変調パラメータ（Frequency/Bandwidth/Constellation/FFT/CodeRate/GuardInterval/TimeInterleavce）のレジスタアドレスをほぼ完全にマップ化**、DACGainも確定。PAGainの送信先とバルク転送ヘッダは未解読 |
+| `mnservice.exe`を介さない直接制御（DLL/サービス完全非依存） | 完了 | [tools/direct_usb](tools/direct_usb) — WinUSBで実機に直接接続し、解読したレジスタバスで読み書きを実証。全ての確定レジスタが期待通りの値を返し、書き込みも実機に反映されることを確認（安全な自己書き戻しテスト）。レジスタが`mnservice.exe`再起動をまたいで永続する**本物のハードウェア状態**であることも実証 |
 
 ## クイックリンク
 
@@ -28,7 +29,8 @@
   - [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) — 実機検証済みの変調パラメータ一覧、Set経路の調査結果
   - [docs/gui_debug_mode_comparison.md](docs/gui_debug_mode_comparison.md) — 通常時/Debug有効時のGUIスクリーンショット比較
 - **ツール**
-  - [tools/custom_sender](tools/custom_sender) — 独自送出ツール（C#）
+  - [tools/custom_sender](tools/custom_sender) — 独自送出ツール（C#、`mnservice.exe`経由）
+  - [tools/direct_usb](tools/direct_usb) — `mnservice.exe`を介さずWinUSBで実機に直接読み書きする診断ツール（C#）
   - [tools/native_analysis](tools/native_analysis) — Ghidra/cdbによる`mnservice.exe`動的解析スクリプト・手順
   - [tools/usb_capture](tools/usb_capture) — USBプロトコル解析メモ
   - [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — RTL-SDRループバック検証メモ
