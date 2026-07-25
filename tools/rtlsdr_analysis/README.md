@@ -29,6 +29,31 @@ python compare.py rtlsdr_baseline.csv rtlsdr_active.csv
 これにより、プロトコルレベルの成功（`ProgramApply`/`SourceStart`が`ResultSuccess`を返す）が
 **実際のRF出力**として物理的に裏付けられた。
 
+## 結果: Bandwidthパラメータの変更がスペクトラム上でも確認できた (2026-07-25)
+
+`mModulationParam.Bandwidth`（FieldID=20、デフォルト`6`）を`8`に変更して同様のスキャンを行い
+（`rtlsdr_bandwidth8.csv`）、ベースラインとの差分を0.5MHz刻みで集計して比較した
+（`profile.py`）:
+
+```
+python profile.py rtlsdr_baseline.csv rtlsdr_active.csv 0.5      # Bandwidth=6
+python profile.py rtlsdr_baseline.csv rtlsdr_bandwidth8.csv 0.5  # Bandwidth=8
+```
+
+同軸直結のため広帯域の電気的ノイズも一定量拾ってしまい、しきい値一本での帯域端検出はうまく
+機能しなかった（ほぼ全域が20dB超の上昇を示す）。ただし0.5MHz刻みの平均値で見ると、
+**明確に高いプラトー領域**が確認でき、その位置がBandwidth設定に応じてシフトした:
+
+| 設定 | 高プラトー領域（目安） | 幅 |
+|---|---|---|
+| Bandwidth=6 | 約470.5〜475.5MHz | 約5MHz |
+| Bandwidth=8 | 約469.5〜476.5MHz | 約7MHz |
+
+特に476.0〜476.5MHz帯は、Bandwidth=6では明確な谷（+26〜30dB）だったのに対し、Bandwidth=8では
+プラトー領域に含まれる高い値（+37dB台）に変化しており、Bandwidth設定が実際にOFDM信号の占有
+帯域幅を変化させていることが確認できた（**変調パラメータがAPI層で受理されるだけでなく、実際に
+物理層まで反映されている**ことの追加の裏付け）。
+
 ## 確認済みの手元ツール
 
 - `rtl_power` / `rtl_sdr` 等（`rtlsdrblog/rtl-sdr-blog`のWindows Release） … コマンドラインで
@@ -59,6 +84,6 @@ Constellation/CodeRate/TimeInterleave等の変調パラメータがビットレ�
 ## 次のアクション（案）
 
 - [x] スペクトラム上でXHEAD-USBの出力が確認できるか（`rtl_power`によるパワースキャン）
-- [ ] `mModulationParam`の値（Constellation/Bandwidth/FFT等）を変更したときに占有帯域幅や
-      スペクトラム形状が変化するかを記録
+- [x] `mModulationParam.Bandwidth`変更時に占有帯域幅が変化するかを記録
+- [ ] Constellation/FFT等、他の変調パラメータについても同様にスペクトラム形状の変化を記録
 - [ ] フルOFDM復調 or 市販チューナーでのTS直接受信によるビットレベル検証
