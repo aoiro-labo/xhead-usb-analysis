@@ -18,7 +18,7 @@
 | 独自送出ツール: 読み取り（プロパティツリーのダンプ） | 完了 | `tools/custom_sender` |
 | 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 完了 | `ChannelOpen`→`ProgramAdd/Commit`→**`ChannelStart`(Source構築前・全プロパティ群込み)**→`Source`構築→`ProgramApply`→`SourceStart`という正しいアーキテクチャを特定。値の変更（Constellation・RF電力のPAGain/DACGain）が実際に物理層まで反映されることもネイティブログで実証済み |
 | RTL-SDRループバックでの実信号検証 | 完了 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出前後で470〜476MHz帯（6MHz幅、ISDB-Tの帯域幅と一致）に約38dBのパワー上昇を実測、送出停止で消失することも確認。設定した中心周波数473MHzとも一致 |
-| `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 検証中 | [tools/usb_capture](tools/usb_capture) — バルク転送(24064バイト=MPEG-TS 188バイト×128、224スライスのリングバッファ)の生TSフレーミングを確認。コントロール転送は`mhal_modulation.cc`が使う「アドレス設定→データ読み書き」の汎用レジスタバスと判明（`0x4A`=アドレスセット/`0x4E`=読み出し/`0x4F`=書き込み）。個々のレジスタアドレスの意味は未解読 |
+| `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 検証中 | [tools/usb_capture](tools/usb_capture) — バルク転送(24064バイト=MPEG-TS 188バイト×128、224スライスのリングバッファ)の生TSフレーミングを確認。コントロール転送は`mhal_modulation.cc`が使う「アドレス設定→データ読み書き」の汎用レジスタバス（`0x4A`=アドレスセット/`0x4E`=読み出し/`0x4F`=書き込み、32bitビッグエンディアン）と判明し、レジスタマップの構築を開始（`0x1202`=Frequency確定、PAGain/DACGainも高確度で特定） |
 
 ## クイックリンク
 
