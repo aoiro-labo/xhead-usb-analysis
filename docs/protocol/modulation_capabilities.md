@@ -307,16 +307,70 @@ FUN_140096ce0 (Channelの Program リストを検索し、見つかったProgram
   再起動で問題なく復帰することを確認済みだが、この呼び方は成立しない。少なくともこの
   ペイロード形状では使えないコマンドである。
 
-**現状のまとめ**: `mPSEncoder`という名のエンコーダオブジェクトが、選んだEngineに関わらず
-`Status==0`のまま初期化されない。公式GUI（`xTaskStartChannel.cs`）はこちらが再現している手順
-（`Program`作成→`Source`作成→`Content`組み立て→`applyContent`→`startSource`）以外に
-明示的なエンコーダ初期化コードを一切持たないため、**エンコーダの初期化は`ProgramApply`
-自体の内部か、それ以前のどこか別の暗黙の経路で自動的に起きるはずだが、こちらの手順では
-その経路がトリガーされていない**、という状況になる。次の有力な調査対象は、`FUN_14008c4b0`の
-もう一つのチェック（`*(Program+0xf0 Obj)+0x140 == 3`が真の場合だけ呼ばれる`FUN_14009db40`、
-これがおそらく実際のエンコーダ初期化/バインド処理）と、そのチェック対象オブジェクト
-（`Program+0xf0`）の正体（Ghidraで型復元されていないため、これもRTTI名を動的に取得するのが
-早い）。`mPSEncoder`のコンストラクタ・初期化メソッドをGhidraで洗い出すのも次の一手。
+### 続報4 (2026-07-25): ブレークスルー — ProgramApply成功、パイプライン全体が動いた
+
+`FUN_14008c4b0`のもう一つのチェック（`*(Program+0xf0 Obj)+0x140 == 3`）を同じRTTI手動解決手法で
+追ったところ、対象オブジェクトは**`mazo::micomsoft::mPegasysChannel`**（＝Pegasys SDKベースの
+チャンネル・エンコードパイプライン管理オブジェクトそのもの）で、これも`Status==0`のまま
+だった。つまり`mPSEncoder`だけでなく、その一段上の`mPegasysChannel`ごと未初期化ということ。
+
+これを手がかりに、decompiled GUIを`ChannelOpen`/`ProgramApply`回りだけでなく**アプリ起動時の
+初期化コード**（`xTaskCreateChannel.cs`）まで遡って読み直したところ、根本的な誤解が見つかった:
+**公式アプリは`CmdChannelStart`を、Sourceが一つも存在しない段階で、デバイス検出時に一度だけ
+呼んでいる。** `xTaskCreateChannel.processTask()`の流れは`createChannel()`（Output由来の
+プロパティで`ChannelOpen`→`ProgramAdd`→`ProgramCommit`）に続けて`startChannel()`
+（`xHeadConfig.applyChannel()`で構築したプロパティで`CmdChannelStart`）を呼ぶだけで、Source/
+Programの実体は一切登場しない。**`CmdChannelStart`は「変調器とエンコーダパイプラインの電源を
+入れる」channelレベルの操作であり、`CmdProgramApply`+`CmdSourceStart`はその後で「稼働中の
+パイプラインに実際の映像/音声ソースを繋ぐ」という完全に別の後段ステップ**、というのが実際の
+アーキテクチャだった。以前「ChannelStartはSource接続後の最後の仕上げ」と誤解していたのは、
+たまたま`xTaskStartChannel.cs`（Source切替用のタスク）だけを読んでいて、デバイス接続時の
+初期化タスクを見ていなかったのが原因。
+
+さらに、`xHeadConfig.applyChannel()`が`CmdChannelStart`に載せて送るプロパティは
+`mModulationParam`だけではなく、`applyChannelParam`(`mMTSChannelParam.Spec.ARIB_STD_B10.
+RegionID`)、`applyCodecParam`(`mPSEncodeParam.Functions`/`Quality.Functions`/`BMLFile`)、
+`applyModulationParam`(`mModulationParam.Frequency`、`mPSRFPowerAdjust.Level`/`PAGain`/
+`DACGain`)、`applyEPGParam`(`mEPGSimpleParam.*`)の4グループにまたがっていた。特に
+**`mPSEncodeParam`が`mPSEncoder`オブジェクトの設定そのもの**であり、これを一度も送っていな
+かったことが、エンコーダが永遠に`Status==0`のままだった直接の原因だったと考えられる。
+
+以前「ChannelStartをSourceなしで先に呼ぶとクラッシュする」と確認した過去のテストは、
+`mModulationParam`（それも一部フィールドのみ）しか積んでいない状態での呼び出しであり、
+今回判明した必須プロパティ群（`mMTSChannelParam`/`mPSEncodeParam`/`mPSRFPowerAdjust`/
+`mEPGSimpleParam`）が欠けたままの不完全なリクエストがクラッシュの真因だった可能性が高い。
+
+**実証**: `ChannelOpen`の応答`msChannel.Properties`（これまでダンプしたことがなかった）を
+確認したところ、`mModulationParam`/`mMTSChannelParam`/`mMTSProgramParam`/`mPSEncodeParam`/
+`mPSRFPowerAdjust`/`mEPGSimpleParam`の6グループ全てが妥当なデフォルト値付きで返ってきていた
+（`mPSEncodeParam`は39フィールド、解像度1080i/YUY2/48kHzステレオ等、実運用に足る値が
+最初から入っている）。この6グループを**変更せずそのままエコーバック**する形で
+`CmdChannelStart`を`ProgramAdd`/`ProgramCommit`の直後・Source構築より前に呼んだところ:
+
+```
+ChannelStart(early): Result=ResultSuccess Status=StatusPrepare ParamCase=None
+...
+ProgramApply: Result=ResultSuccess          ← 悲願の成功
+SourceStart: Result=ResultSuccess Status=StatusRunning
+[event] EventChannelMediaActivate HandleID=33554433 ParamCase=ProgramID   ← 初観測のイベント
+```
+
+ネイティブログ側でも実際にハードウェアレベルの動作が確認できた:
+```
+mpegasys_function.cc:174] encoder [1920x1080 [30000/1001]]   ← Pegasysエンコーダが実パラメータで起動
+mpegasys_output.cc:260] adjust power : [00:00]                ← RF電力調整が呼ばれた(Level=0のまま)
+mnchannel.cc:337] channel [02000001] start output              ← チャンネルが実際に出力開始
+mpegasys_encode.cc:333] OK                                     ← エンコーダの応答
+```
+
+クラッシュなし、デバイス・サービスとも健全。`bad status`の壁は完全に突破した。
+
+**残課題**: `mPSRFPowerAdjust.Level`をデフォルトの`0`のままエコーバックしたため、RF出力電力が
+実質ゼロの可能性が高い。同軸直結のループバック環境なら検出できる可能性はあるが、実際に
+RTL-SDRで受信確認する際は`Level`を意図的に上げる必要があるかもしれない。次にやるべきことは
+(1) RTL-SDRでの実受信確認、(2) `mModulationParam`の値（Constellation等）を実際に変更して
+`ChannelStart`に反映させ、変更が本当に効くことを確認、(3) `mPSRFPowerAdjust.Level`を上げて
+信号強度を確認、の3点。
 
 ## 取得方法（再現手順）
 

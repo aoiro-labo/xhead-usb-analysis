@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -407,6 +408,17 @@ namespace XHeadSender
             if (openResp.ParamCase != msResponse.ParamOneofCase.Channel) return;
             uint chHandle = openResp.Channel.HandleID;
 
+            // xTaskCreateChannel.cs (decompiled GUI) revealed the official app calls
+            // CmdChannelStart with a much larger property set than just mModulationParam --
+            // also mPSRFPowerAdjust, mMTSChannelParam, mPSEncodeParam (the encoder config!) and
+            // mEPGSimpleParam -- and calls it once at device-connect time, BEFORE any Source ever
+            // exists. msChannel (ChannelOpen's response type) has its own Properties field we've
+            // never dumped before; check whether it carries descriptors/defaults for these groups
+            // the same way ProgramAdd's response carried mModulationParam's.
+            Console.WriteLine($"  Channel.Properties = {openResp.Channel.Properties.Count}");
+            foreach (var prop in openResp.Channel.Properties) DumpProperty(prop, 2);
+            Console.Out.Flush();
+
             var addReq = new msRequest { Cmd = msServiceCmd.CmdProgramAdd, ClientID = clientId, HandleID = chHandle };
             var addResp = client.sendRequest(addReq, deadline: DateTime.UtcNow.AddSeconds(5));
             Console.WriteLine($"  ProgramAdd: Result={addResp.Result} ParamCase={addResp.ParamCase}" +
@@ -432,27 +444,55 @@ namespace XHeadSender
                 (commitResp.HasErrMessage ? $" ErrMessage={commitResp.ErrMessage}" : ""));
             Console.Out.Flush();
 
-            // Native disassembly of mnservice.exe found the exact precondition ProgramApply
-            // checks: `cmp dword ptr [obj+0x58], 3 ; jne bad_status` -- 3 == msStatus.StatusReady.
-            // Never observed an EventChannelStatus in any prior run; check whether the channel
-            // itself asynchronously reaches StatusReady if given enough time after ProgramCommit
-            // (mirroring the Source/Capture Prepare->Ready pattern) before we ever try ProgramApply.
-            Console.WriteLine("  Watching for the CHANNEL's own status event for 15s (never observed one before)...");
-            var chStatus = watcher.WaitForStatusReady(chHandle, TimeSpan.FromSeconds(15));
-            Console.WriteLine($"  Channel status after wait: {chStatus?.Status.ToString() ?? "(no event received)"}");
-            Console.Out.Flush();
-
             if (commitResp.Result != msResult.ResultSuccess)
             {
                 CloseChannel(client, clientId, chHandle);
                 return;
             }
 
-            // Confirmed empirically: calling CmdChannelStart with no source ever attached crashes
-            // mnservice.exe natively, regardless of whether it's attempted before or after source
-            // setup otherwise begins (tried both). So: fully attach and start a source FIRST
-            // (Source/ProgramApply/SourceStart), and only call ChannelStart once that has
-            // succeeded. See docs/protocol/modulation_capabilities.md for the full history.
+            // MAJOR revision: decompiled xTaskCreateChannel.cs shows the official app calls
+            // CmdChannelStart once, right here (ChannelOpen -> ProgramAdd -> ProgramCommit ->
+            // ChannelStart), BEFORE any Source/Program-apply ever happens -- ChannelStart powers
+            // up the modulator + encoder pipeline; ProgramApply/SourceStart later just attaches a
+            // live source to the already-running channel. Earlier "ChannelStart with no source
+            // crashes" tests only ever sent an empty or mModulationParam-only property set --
+            // xHeadConfig.applyChannel() (decompiled) shows the real payload also needs
+            // mPSRFPowerAdjust, mMTSChannelParam, mPSEncodeParam (the encoder config -- this is
+            // almost certainly what actually initializes the mPSEncoder object that live cdb
+            // debugging showed stuck at Status=0) and mEPGSimpleParam. Echo back everything the
+            // server just handed us in Channel.Properties unchanged first (safest starting point
+            // -- confirm this doesn't crash and lets ProgramApply through before tuning any
+            // individual value).
+            var channelStartProps = new List<msPropertyParam>();
+            foreach (var prop in openResp.Channel.Properties)
+            {
+                channelStartProps.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+            var earlyStartReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
+            earlyStartReq.Properties.AddRange(channelStartProps);
+            msResponse earlyStartResp;
+            try
+            {
+                Console.WriteLine("  Calling CmdChannelStart EARLY (before any Source exists), echoing all 6 property groups unchanged...");
+                Console.Out.Flush();
+                earlyStartResp = client.sendRequest(earlyStartReq, deadline: DateTime.UtcNow.AddSeconds(10));
+                Console.WriteLine($"  ChannelStart(early): Result={earlyStartResp.Result} Status={earlyStartResp.Status} ParamCase={earlyStartResp.ParamCase}" +
+                    (earlyStartResp.HasErrMessage ? $" ErrMessage={earlyStartResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  ChannelStart(early) RPC error: {ex.Status}");
+                earlyStartResp = null;
+            }
+            Console.Out.Flush();
+            if (earlyStartResp == null || earlyStartResp.Result != msResult.ResultSuccess)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            Console.WriteLine("  *** ChannelStart(early) SUCCEEDED -- channel/encoder pipeline should now be live. Proceeding to Source setup. ***");
+            Console.Out.Flush();
+
             //
             // SourceUrl (file) proved to be a dead end from the client side: CmdSourceOpen always
             // returns before async Media Foundation probing finishes, and nothing (event or a
@@ -629,45 +669,13 @@ namespace XHeadSender
 
             if (sourceStartResp != null && sourceStartResp.Result == msResult.ResultSuccess)
             {
-                // Full field set for mModulationParam, mirroring mnPropertiesParam.enumFields():
-                // every leaf (Number/Select) field at its current/default value, Constellation
-                // changed from the QAM64 default to QPSK as a visible/verifiable test.
-                var modProp = new msPropertyParam { Name = "mModulationParam" };
-                modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 0, UintVal = 473000 });   // Frequency
-                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 1, IntVal = 1 });          // DacCtrl.IFMode = Disable
-                modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 2, UintVal = 0 });        // DacCtrl.IFFreq
-                modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 3, UintVal = 0 });        // DacCtrl.GAIN
-                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 19, IntVal = 1 });         // Constellation: QAM64(3) -> QPSK(1)
-                modProp.Values.Add(new msVariant { Type = msVariantType.VariantUint, FieldID = 20, UintVal = 6 });       // Bandwidth
-                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 21, IntVal = 1 });         // FFT = 8k
-                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 22, IntVal = 3 });         // CodeRate = CR_5_6
-                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 23, IntVal = 1 });         // GuardInterval = GI_1_16
-                modProp.Values.Add(new msVariant { Type = msVariantType.VariantInt, FieldID = 24, IntVal = 3 });         // TimeInterleavce = Mode3
-
-                var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
-                startReq.Properties.Add(modProp);
-                msResponse startResp;
-                try
-                {
-                    Console.WriteLine("  Source is running with real content attached. Calling ChannelStart now...");
-                    Console.Out.Flush();
-                    startResp = client.sendRequest(startReq, deadline: DateTime.UtcNow.AddSeconds(10));
-                    Console.WriteLine($"  ChannelStart: Result={startResp.Result} Status={startResp.Status} ParamCase={startResp.ParamCase}" +
-                        (startResp.HasErrMessage ? $" ErrMessage={startResp.ErrMessage}" : ""));
-                }
-                catch (RpcException ex)
-                {
-                    Console.WriteLine($"  ChannelStart RPC error: {ex.Status}");
-                    startResp = null;
-                }
+                // Channel was already started earlier (before Source even existed), matching the
+                // official app's real architecture (xTaskCreateChannel.cs) -- no second
+                // CmdChannelStart here. Source is now live and attached to the already-running
+                // channel/encoder pipeline; just give it a moment to actually flow before cleanup.
+                Console.WriteLine("  *** Source is running with real content attached to the already-started channel! Check RTL-SDR now. Waiting 8s... ***");
                 Console.Out.Flush();
-
-                if (startResp != null && startResp.Result == msResult.ResultSuccess)
-                {
-                    Console.WriteLine("  *** Channel started successfully with real content! Check RTL-SDR now. Waiting 8s... ***");
-                    Console.Out.Flush();
-                    Thread.Sleep(8000);
-                }
+                Thread.Sleep(8000);
             }
 
             var stopChReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };

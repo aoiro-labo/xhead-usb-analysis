@@ -16,8 +16,8 @@
 | gRPCプロトコルの完全再構成（`.proto`、DLL非依存で再実装可能） | 完了 | [docs/protocol/README.md](docs/protocol/README.md) |
 | 実機からの変調パラメータ確定（FieldID・許容値） | 完了 | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) |
 | 独自送出ツール: 読み取り（プロパティツリーのダンプ） | 完了 | `tools/custom_sender` |
-| 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 検証中 | `ChannelOpen`〜`SourceOpen`(Ready・Content取得済み)まで成功。Ghidra+cdbの動的解析で`CmdProgramApply`失敗の真因を特定: `mPSEncoder`という名のエンコーダオブジェクトが未初期化(Status=0)のまま。初期化経路は未解明 |
-| RTL-SDRループバックでの実信号検証 | 未着手 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) |
+| 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 完了 | `ChannelOpen`→`ProgramAdd/Commit`→**`ChannelStart`(Source構築前・全プロパティ群込み)**→`Source`構築→`ProgramApply`→`SourceStart`という正しいアーキテクチャを特定。`ProgramApply`成功、実際にPegasysエンコーダ・チャンネル出力が起動することをネイティブログで確認済み |
+| RTL-SDRループバックでの実信号検証 | 未着手（着手可能） | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出パイプラインは動作確認済みなのでいつでも着手できる。ただしRF電力(`mPSRFPowerAdjust.Level`)がデフォルト`0`のままの可能性あり |
 | `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 未着手 | [tools/usb_capture](tools/usb_capture) |
 
 ## クイックリンク
@@ -46,6 +46,8 @@ XHEAD-STUDIOは **GUI (`xhead_studio.exe`)** と **バックグラウンドサ�
 </p>
 
 さらに、GUI⇔サービス間の通信は固定メッセージではなく汎用的なプロパティツリー方式であり、公式GUIが一切参照していない設定項目がサービス側に存在する。実機から読み出した変調パラメータの完全なFieldID一覧は [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) にまとめてあり、ISDB-T以外にDVB-T2/ATSC/DTMB等のサブ構造体まで存在することが判明している（変調チップ自体は多規格対応の可能性が高い）。`tools/custom_sender` はこのサービスに直接接続し、公式GUIの制限を経由せずフル機能へアクセスすることを目指す独自クライアントである。
+
+送出（Set）経路は当初`CmdProgramApply`が謎の`bad status`エラーで止まっていたが、Ghidra・cdbによるネイティブ動的解析の末に真因（エンコーダオブジェクトの未初期化）を特定し、さらに`CmdChannelStart`はSourceが一切存在しない段階で一度だけ呼ぶ「変調器・エンコーダの電源投入」操作であり、`CmdProgramApply`／`CmdSourceStart`はその後で「稼働中のパイプラインに実ソースを繋ぐ」別の後段ステップである、という公式アプリの実際のアーキテクチャを特定した。この順序と必須プロパティ群を揃えたところ送出パイプライン全体が動作した（詳細は [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) の「続報3・4」）。
 
 ## ディレクトリ構成
 
