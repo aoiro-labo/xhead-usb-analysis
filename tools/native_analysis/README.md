@@ -99,6 +99,22 @@ analyzeHeadless.bat <projectDir> <projectName> -process mnservice.exe -noanalysi
 張ることで、アドレス・データのペアを直接、手動hexデコードなしで取得できた
 （[tools/usb_capture/README.md](../usb_capture/README.md)「続報5」）。
 
+**Tips2: 「読み出し」系ヘルパーで実際に読めた値を知りたい場合、関数エントリの引数
+（出力バッファへのポインタ）を見るだけでは不十分**——エントリ時点ではまだ結果が
+書き込まれていない。`gu`（現在の関数からreturnするまで実行）を挟んでから、エントリ時に
+保存しておいたポインタの中身を読むと実際の値が取れる:
+
+```
+bu mnservice+0x87920 "r $t0 = r8; r $t1 = r9; gu; .printf \"READ addr=0x%x -> data=0x%x\n\", $t0, poi($t1); g"
+```
+
+`r8`(アドレス引数)と`r9`(出力バッファポインタ)をエントリ時にcdbの疑似レジスタ`$t0`/`$t1`へ
+退避 → `gu`でreturnまで実行（この間に`r9`自体は呼び出し先で破壊される可能性があるが、
+退避した`$t1`は無事）→ `poi($t1)`で出力バッファの中身（＝実際に読めたレジスタ値）を
+表示、という流れ。これで単発読み出しヘルパーの「アドレス→実際の値」対応表を直接得られる
+（[tools/usb_capture/README.md](../usb_capture/README.md)「続報9」で新しいレジスタ帯
+`0x0020`〜`0x0029`の発見に使用）。
+
 ### オブジェクトの実行時の型を知る（MSVC RTTI手動解決）
 
 Ghidraが型復元できていないポインタでも、実行中にRTTIを手動で辿ればクラス名が分かる場合が

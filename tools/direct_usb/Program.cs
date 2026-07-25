@@ -146,9 +146,21 @@ namespace XHeadDirectUsb
                         0x0694, // TimeInterleavce (high confidence)
                         // RF power bank
                         0x1220, 0x1221, 0x1228, 0x1229, 0x1290,
+                        // RF power "gated" block -- static analysis said writes here are always
+                        // gated off, but a 2026-07-26 full-lifecycle cdb capture showed these ARE
+                        // read (0xa/0x88/0x0/0x4 observed) right before the DACGain/commit writes,
+                        // likely PA calibration/status data (tools/usb_capture/README.md "続報9").
+                        0x1280, 0x1281, 0x1282, 0x1283,
                         // Unidentified, stable across runs
                         0x0600, 0x0601, 0x0602, 0x0629, 0x0640, 0x0641, 0x0642,
                         0x0680, 0x0681, 0x0682, 0x0683,
+                        // NEW (2026-07-26): a third register bank, read once at device-connect
+                        // time before any ChannelStart -- 0x0025's value matched mwinusb.cc's
+                        // logged "Transform" value byte-for-byte, so this looks like a device
+                        // identification/compatibility-check block. 0x0020 additionally showed a
+                        // changing low byte later on (not purely static). See
+                        // tools/usb_capture/README.md "続報9".
+                        0x0020, 0x0023, 0x0024, 0x0025, 0x0026, 0x0027, 0x0028, 0x0029,
                         // Unexplored neighbours of the confirmed cluster, in case a Mode-select
                         // register lives nearby (pure exploration, low confidence)
                         0x0685, 0x0686, 0x0687, 0x0688, 0x0689,
