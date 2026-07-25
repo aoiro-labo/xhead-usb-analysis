@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Grpc.Core;
@@ -533,13 +534,34 @@ namespace XHeadSender
             Console.WriteLine($"  Source's own Program ID={srcProgram.ID} Streams={srcProgram.Streams.Count}");
             foreach (var s in srcProgram.Streams) Console.WriteLine($"    Stream Index={s.Index} ID={s.ID} Format={s.Format}");
 
+            Console.WriteLine($"  Available engines ({msClient.Engines.Count}):");
+            foreach (var eng in msClient.Engines)
+            {
+                Console.WriteLine($"    HandleID={eng.HandleID} Name={eng.Name} Desc={eng.Desc}");
+            }
+            // Live cdb inspection (breakpoint on the real ProgramApply-precondition check function,
+            // FUN_14009a130 at mnservice+0x9a130) showed the object being checked is an
+            // "mPSEncoder" (namespace mazo::micomsoft) with its internal Status field == 0
+            // (uninitialized), not 3 (Ready) -- i.e. the chosen Engine's encoder was never
+            // initialized. We were blindly picking Engines[0] (observed to be
+            // "microsoft_d3d11va", a Media Foundation engine that may not support encoding this
+            // capture's format); the official app instead does
+            // mnClient.Engine.findEngine(HWAccel) first. Try preferring an NVIDIA/NVENC engine
+            // (observed second in the list, "nvidia_cuvid") since that's the one actually
+            // plausible for real hardware encode -- see docs/protocol/modulation_capabilities.md.
+            var chosenEngine = msClient.Engines.FirstOrDefault(e =>
+                (e.Name?.IndexOf("nvidia", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (e.Name?.IndexOf("cuvid", StringComparison.OrdinalIgnoreCase) >= 0))
+                ?? (msClient.Engines.Count > 0 ? msClient.Engines[0] : null);
+            Console.WriteLine($"  Chosen engine: HandleID={chosenEngine?.HandleID} Name={chosenEngine?.Name}");
+
             var content = new msMediaContent
             {
                 Index = 0,
                 Param = new msMediaParam { Functions = msMediaFunction.MediaNone },
                 SourceID = src.HandleID,
                 ProgramID = srcProgram.ID,
-                EngineID = msClient.Engines.Count > 0 ? msClient.Engines[0].HandleID : 0
+                EngineID = chosenEngine?.HandleID ?? 0
             };
             foreach (var s in srcProgram.Streams)
             {
@@ -550,6 +572,25 @@ namespace XHeadSender
             Console.WriteLine($"  Built msMediaContent: SourceID={content.SourceID} ProgramID={content.ProgramID} EngineID={content.EngineID} Streams={content.Streams.Count}");
             Console.Out.Flush();
 
+            // msServiceCmd.CmdEngineApply = 60 exists in the wire protocol (decompiled
+            // mnClientDotNet/mnFramework.grpc/msServiceCmd.cs) but is NEVER referenced anywhere in
+            // the decompiled GUI -- confirmed empirically that calling it (HandleID=channel,
+            // Content=same msMediaContent as ProgramApply) crashes mnservice.exe outright ("Stream
+            // removed" / native process exit). Device/service recover fine on restart, but this is
+            // NOT a viable path with this payload shape -- do not call it. See
+            // docs/protocol/modulation_capabilities.md for the full writeup.
+
+            // Live cdb breakpoint on absl::FailedPreconditionError (mnservice+0x36ed79), triggered
+            // right as our ProgramApply call fails, captured the real call chain (not the earlier
+            // misattributed CmdConnect finding): mnbridge dispatch -> FUN_140096ce0 (walks the
+            // Channel's Program list, invokes Program::Apply virtual method) -> FUN_14008c4b0
+            // (Program::Apply) -> FUN_14009a130, which checks `*(SomeObj + 0x58) == 3` (3 ==
+            // msStatus.StatusReady) and returns exactly our "bad status" FailedPreconditionError
+            // if not. Tried calling SourceStart before ProgramApply (Source ends up StatusRunning
+            // instead of StatusReady) -- identical failure, so the checked object is NOT the
+            // Source. Reverted to the official app's confirmed order (xTaskStartChannel.cs:
+            // applyContent() strictly before source_.startSource()) -- see
+            // docs/protocol/modulation_capabilities.md for the live-debugging writeup.
             var applyReq = new msRequest { Cmd = msServiceCmd.CmdProgramApply, ClientID = clientId, HandleID = chHandle, Content = content };
             msResponse applyResp;
             try

@@ -1,0 +1,3 @@
+.logopen /t C:\Users\aoiro\cdb_session.log
+bu mnservice+0xOFFSET "kb 15; g"
+g

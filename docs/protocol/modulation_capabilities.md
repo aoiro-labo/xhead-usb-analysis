@@ -197,48 +197,126 @@ CmdChannelOpen → CmdProgramAdd → CmdProgramCommit
 完全なオープン手順。次回はここから`CmdProgramApply`前提条件の特定（またはネイティブ解析）を
 再開できる。
 
-### 続報2 (2026-07-25): mnservice.exeの逆アセンブルで前提条件を特定
+### 続報2 (2026-07-25): 静的解析による前提条件特定は誤りだった【訂正】
 
-`pefile` + `capstone`（Pythonで利用可能）を使い、`mnservice.exe`から直接、`bad status`文字列への
-参照を静的解析した。手法: `.rdata`内の対象文字列群のRVAを特定 → `.text`全体を線形disasm
-（`skipdata=True`で非コード領域をスキップしつつ再同期）→ `lea reg, [rip+disp]`命令で
-当該RVAを指しているものを検索。
+当初、`pefile` + `capstone`による静的解析（`.rdata`内の`bad status`文字列へのRVA参照を
+`.text`全体から線形disasmで検索）で `0x14002580b: cmp dword ptr [rbp+0x58], 3` という分岐を
+発見し、これが`CmdProgramApply`の前提条件だと結論づけていた。
 
-結果、`bad status` / `channel not connected` / `program not committed` / `channel already
-connected` / `program already connect` / `program[%d] already commit` / `program invalid` が
-すべて **0x140025921〜0x14002bace（約20KB、`mnbridge.cc`内と推定）** という単一の領域に密集して
-いることを確認した。これはChannel/Program系コマンド（Open/Close/Commit/Apply等）のハンドラ群が
-まとまって実装されていることを裏付ける。
+**これは誤りだった。** Ghidra（後述）で当該関数（`FUN_1400257b0`）をデコンパイルしたところ、
+この関数は実際には**`CmdConnect`のハンドラ**であることが判明した。呼び出し元
+`FUN_14002c660`が`"D:\mn-next\mnframework\components\service\app\src\mnclient.cc"`という
+デバッグ文字列や`msClientParam::vftable`を参照しており、`msClient`応答
+（Outputs/Engines等を含む）を構築する処理そのものだった。`[rbp+0x58]==3`という同じ形の
+チェックがたまたま複数箇所に存在し、別のコマンドのものを掴んでいたことになる。
 
-このうち最初の`bad status`分岐（0x140025921）を生む条件分岐を特定した:
+このセクションの以降の記述（`msMediaContent.Param`の設定試行など）は前提が誤っていたため撤回し、
+下記「続報3」に置き換える。静的な文字列grepだけで「同じ定数と比較している分岐」を見つけても、
+それが目的のコマンドのものとは限らない、という教訓が得られた。実際の呼び出し元を確定するには
+動的解析（ライブブレークポイント）か、最低でも呼び出し階層を遡るコールグラフ解析が必要。
 
-```asm
-0x14002580b: cmp dword ptr [rbp+0x58], 3
-0x14002580f: jne 0x140025921        ; not-equalなら "bad status" へ
-0x140025815: ...                    ; 続行パス: 3つの子構造体を順に処理
-  lea rcx, [rbp+0x47a8] / mov rdx, rdi / call 0x140031490
-  lea rcx, [rbp+0x4528] / mov rdx, rdi / call 0x1400280d0
-  lea rcx, [rbp+0x4a28] / mov rdx, rdi / call 0x140034 0a0
-0x14002591f: jmp 0x140025981        ; 成功時、エラーブロックを飛び越す
+### 続報3 (2026-07-25): 動的解析でProgramApplyの真の前提条件を特定
+
+Ghidra 12.1.2（headlessモード、`analyzeHeadless.bat`でインポート・自動解析、以降は
+`-process -noanalysis -postScript`で高速に再利用）と`cdb.exe`（WinDbg付属のコンソール
+デバッガ）を導入し、動的解析に切り替えた。
+
+**cdbの罠**: `cdb.exe -g -G -cf <cmdfile> mnservice.exe`という起動方法（`-g`=初回ブレーク無視、
+`-G`=終了時ブレーク無視、`-cf`=起動時コマンドファイル）を最初に試したが、何度やっても
+コマンドファイルの内容が一切実行された形跡がなかった（`.logopen`のログファイルすら
+作成されない）。`cdb -?`のヘルプを読み直したところ、`-cf`は**「最初のデバッガプロンプトで」**
+実行される仕様であり、`-g`は**まさにその最初のプロンプト（プロセス生成時の初期ブレーク）を
+スキップする**フラグだった。つまり`-g`と`-cf`は根本的に両立しない組み合わせで、
+`-g`を外した瞬間に狙い通り動いた。以前の調査メモにあった「メインイメージのモジュール名が
+`image00007ff6...`という謎の名前で読み込まれる」という観察は実は無関係な副次的事象で
+（`lm`で確認すると内部的には正しく`mnservice`として登録されていた）、真因はこの`-g`の誤用
+だった。
+
+**実際に効いた起動法**:
+```
+cdb.exe -cf C:\Users\aoiro\cdb_cmds.txt "C:\Program Files\Micomsoft\XHEAD-STUDIO\service\mnservice.exe"
+```
+コマンドファイル（ASCII推奨。日本語パスを`.logopen`に渡すと解析失敗して全コマンドが
+無視される事例があったため、ログ出力先はASCIIパスにする）:
+```
+.logopen /t C:\Users\aoiro\cdb_session.log
+bu mnservice+0x36ed79 "kb 15; g"
+g
+```
+`0x36ed79`は`absl::lts_20240116::FailedPreconditionError`（全ての`FailedPreconditionError`系
+ステータス生成箇所、約121箇所から共通で呼ばれる関数）のオフセット。Ghidraのシンボル検索で
+特定した。
+
+**ログタイミング診断（cdb不要、まず先にこれで判明した重要な副産物）**: `bad status`ログ直後に
+現れる`source not connected` / `object not attached` / `channel not connected`の3行が、
+`ProgramApply`自体の内部失敗の一部なのか、それとも失敗後にクライアントが呼ぶ
+`SourceClose`/`ChannelClose`の副作用なのかを切り分けるため、失敗検出後のクリーンアップ呼び出し
+前に`Thread.Sleep(3000)`を仕込んで再実行した。結果、`bad status`から3.002秒後（=注入した
+sleepと一致）に3行が出現することを確認し、**この3行は完全に無関係（自分自身のClose呼び出しが
+未接続オブジェクトに対して出す想定内の警告）と判明した**。以前「channel not connected」を
+手がかりに「ChannelStartが先に必要では」と推測していたが、これは誤りだったことになる。
+
+**実際の呼び出し連鎖（cdbで実測）**: `FailedPreconditionError`にブレークを張ったまま
+`XHeadSender.exe`を実行し、ネイティブログの`bad status`行の直前に記録された`kb 15`スタック
+トレースを読むと、以下の呼び出し連鎖が判明した（`mnservice+0x28f3a`から先は他の失敗時にも
+現れる汎用ディスパッチ経由なので割愛）:
+
+```
+FUN_140096ce0 (Channelの Program リストを検索し、見つかったProgramの仮想メソッド[vtbl+0x10]を呼ぶ)
+  -> FUN_14008c4b0 (Program::Apply相当。Program+0xf0とProgram+0xf8の2つの関連オブジェクトを
+                     それぞれ status==3 で条件チェック)
+       -> FUN_14009a130 (`*(param_1+0x58) == 3` を最終チェック。不一致なら
+                          `absl::FailedPreconditionError("bad status")` を返す ← ここが震源地)
 ```
 
-`3`は`msStatus.StatusReady`の数値と一致する。ただし`[rbp+0x58]`が具体的に何のオブジェクトの
-どのフィールドかは、関数のプロローグ (`0x1400257b0`, 引数: `rcx→rbp`, `rdx→rsi`, `r8→rdi`)
-だけからは断定できなかった。以下を検証し、「チャンネル自身が非同期にReadyへ遷移するのを待てば
-良い」という仮説は**否定した**: `CmdProgramCommit`成功後に15秒待っても対象チャンネルの
-`EventChannelStatus`は一度も発火しなかった（全テスト履歴を通じて一度も観測されていない）。
-したがって`[rbp+0x58]`はチャンネルの`status_`ではなく、**リクエスト/Content構造体側の
-未設定フィールド**（例: 送っていない`msMediaContent.Param`(`msMediaParam.Functions`)や、
-Streamごとのフォーマット情報等）である可能性の方が高いと考えられる。
+`FUN_14009a130`をピンポイントに再ブレークし（`mnservice+0x9a130`）、関数エントリでの
+`rcx`（第1引数=チェック対象オブジェクト）をダンプ、さらにvtableポインタから手動でMSVC RTTIを
+辿った（`vtbl-8`→CompleteObjectLocator→`+0xc`のRVA→TypeDescriptor→`+0x10`のマングル名）:
 
-この関数呼び出し自体（`ChannelStart`を先に呼んでクラッシュした件）とは**別の場所**である点にも
-注意。クラッシュは`[rbp+0x58]`チェックが失敗を返すだけの本経路ではなく、Source/Content未接続の
-まま実際に処理を進めようとする別のコードパスで発生していると考えられる。
+```
+--- HIT rcx=00000241dd284f20 vtbl=00007ff6eef9c878 status58=0 ---
+".?AVmPSEncoder@micomsoft@mazo@@"   ; = class mazo::micomsoft::mPSEncoder
+```
 
-**次回への引き継ぎ**: `msMediaContent.Param`に`msMediaParam{Functions=MediaNone}`を明示的に
-設定して再試行したが、結果は変わらず同じ`bad status`だった（この仮説は否定）。`rbp`(第1引数)の
-実体を特定するには、この関数の呼び出し元（0x1400257b0を呼んでいる箇所）を辿るか、Ghidra等で
-型復元を行うのが確実な近道。ブラックボックス試行はここで一区切りとした。
+つまりチェック対象は**Source でも Channel でもなく、`mPSEncoder`という名のエンコーダ
+オブジェクトそのもの**であり、そのステータスが`0`（未初期化）のまま`3`(Ready)に一度も
+遷移していない、というのが`bad status`の真の原因だった。この1関数だけは1回のProgramApply
+試行で正確に1回しかヒットしない（`FailedPreconditionError`本体は起動〜終了までに100回以上
+ヒットする内部的なステータス生成の共通処理なので、狙った箇所を直接ブレークする方が
+はるかにノイズが少ない）。
+
+**検証して否定した仮説**:
+- **SourceのStatusタイミング説**: `CmdSourceStart`を`CmdProgramApply`より先に呼ぶ順序に
+  変更して再テストした。Sourceは`StatusReady`(3)を経て`StatusRunning`(4)まで確実に進んだが、
+  `ProgramApply`は全く同じ`bad status`で失敗した。この時点で`FUN_14009a130`がチェックしている
+  のはSourceのステータスではないと確定した。なお`xTaskStartChannel.cs`（decompiled）を確認した
+  ところ、公式アプリは`applyContent()`を`source_.startSource()`より**厳密に先に**呼んでおり
+  （`ProgramApply` → `SourceStart`の順）、今回の実装は元々この順序で正しかった。SourceStart
+  を先出しする変更は撤回し、公式の順序に戻した。
+- **Engine選択ミス説**: `msClient.Engines`には`microsoft_d3d11va`（Media Foundation経由）と
+  `nvidia_cuvid`（NVENC/NVDEC）の2つが存在し、これまで`Engines[0]`（前者）を無条件で選んで
+  いた。RTX 5070 Tiを積む実機なら後者の方が実用的なエンコーダだろうと考え、名前に
+  `nvidia`/`cuvid`を含むものを優先選択するよう変更して再テストしたが、**どちらのEngineを
+  選んでも`bad status`は完全に同一だった**。少なくともこの2エンジンのどちらも、選んだだけでは
+  `mPSEncoder`が初期化されないことになる。
+- **`CmdEngineApply`(=60)を直接呼ぶ説**: decompileした`mnClientDotNet`のプロトコル定義
+  （`msServiceCmd.cs`）には`CmdEngineApply = 60`という、GUIコード側からは一度も参照されて
+  いないコマンドが存在する。`msRequest`のoneofに専用のEngineパラメータ枠はないため、
+  `ProgramApply`と同じ`Content`（`msMediaContent`）を流用する形で試しに送信したところ、
+  **`mnservice.exe`がクラッシュした**（`Stream removed`でプロセス終了）。デバイス・サービスは
+  再起動で問題なく復帰することを確認済みだが、この呼び方は成立しない。少なくともこの
+  ペイロード形状では使えないコマンドである。
+
+**現状のまとめ**: `mPSEncoder`という名のエンコーダオブジェクトが、選んだEngineに関わらず
+`Status==0`のまま初期化されない。公式GUI（`xTaskStartChannel.cs`）はこちらが再現している手順
+（`Program`作成→`Source`作成→`Content`組み立て→`applyContent`→`startSource`）以外に
+明示的なエンコーダ初期化コードを一切持たないため、**エンコーダの初期化は`ProgramApply`
+自体の内部か、それ以前のどこか別の暗黙の経路で自動的に起きるはずだが、こちらの手順では
+その経路がトリガーされていない**、という状況になる。次の有力な調査対象は、`FUN_14008c4b0`の
+もう一つのチェック（`*(Program+0xf0 Obj)+0x140 == 3`が真の場合だけ呼ばれる`FUN_14009db40`、
+これがおそらく実際のエンコーダ初期化/バインド処理）と、そのチェック対象オブジェクト
+（`Program+0xf0`）の正体（Ghidraで型復元されていないため、これもRTTI名を動的に取得するのが
+早い）。`mPSEncoder`のコンストラクタ・初期化メソッドをGhidraで洗い出すのも次の一手。
 
 ## 取得方法（再現手順）
 

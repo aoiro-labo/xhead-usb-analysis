@@ -16,7 +16,7 @@
 | gRPCプロトコルの完全再構成（`.proto`、DLL非依存で再実装可能） | 完了 | [docs/protocol/README.md](docs/protocol/README.md) |
 | 実機からの変調パラメータ確定（FieldID・許容値） | 完了 | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) |
 | 独自送出ツール: 読み取り（プロパティツリーのダンプ） | 完了 | `tools/custom_sender` |
-| 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 検証中 | デスクトップキャプチャ経由で`ChannelOpen`〜`SourceOpen`(Ready・Content取得済み)まで成功。`CmdProgramApply`が`bad status`で止まっており、この先はネイティブ解析が必要 |
+| 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 検証中 | `ChannelOpen`〜`SourceOpen`(Ready・Content取得済み)まで成功。Ghidra+cdbの動的解析で`CmdProgramApply`失敗の真因を特定: `mPSEncoder`という名のエンコーダオブジェクトが未初期化(Status=0)のまま。初期化経路は未解明 |
 | RTL-SDRループバックでの実信号検証 | 未着手 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) |
 | `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 未着手 | [tools/usb_capture](tools/usb_capture) |
 
@@ -29,6 +29,7 @@
   - [docs/gui_debug_mode_comparison.md](docs/gui_debug_mode_comparison.md) — 通常時/Debug有効時のGUIスクリーンショット比較
 - **ツール**
   - [tools/custom_sender](tools/custom_sender) — 独自送出ツール（C#）
+  - [tools/native_analysis](tools/native_analysis) — Ghidra/cdbによる`mnservice.exe`動的解析スクリプト・手順
   - [tools/usb_capture](tools/usb_capture) — USBプロトコル解析メモ
   - [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — RTL-SDRループバック検証メモ
 
