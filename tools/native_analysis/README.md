@@ -36,9 +36,16 @@ analyzeHeadless.bat <projectDir> <projectName> -process mnservice.exe -noanalysi
   ディスパッチャ本体を特定・デコンパイルする。
 - `XHeadAnalyze.java` — 指定した1関数と、その呼び出し元（最大5件）をデコンパイルする
   汎用スクリプト。
-- `XHeadProgramApplyStack.java` — cdbで実際に採取したコールスタックのオフセット群を
-  まとめてデコンパイルする。動的解析で得たスタックトレースを静的な関数本体に対応付ける際に
-  使う（このファイルの`offsets`配列を書き換えて使い回す）。
+- `XHeadProgramApplyStack.java` / `XHeadDecodeUsbLoop.java` — cdbで実際に採取したコール
+  スタックのオフセット群をまとめてデコンパイルする。動的解析で得たスタックトレースを静的な
+  関数本体に対応付ける際に使う（ファイル内のオフセット配列を書き換えて使い回す）。
+- `XHeadFindWinUsbCalls.java` — インポートされたWindows API（`WinUsb_ControlTransfer`等）の
+  実際の呼び出し元を辿る。**注意**: `getReferencesTo(externalSymbolAddr)`だけでは
+  「EXTERNALシンボルを指すインポートサンク自身」しか見つからない。サンク関数自体の
+  エントリポイントに対してさらに`getReferencesTo`する必要がある（このスクリプトは既にその
+  2段階を実装済み）。インポート関数のサンクがvtable/関数ポインタテーブル経由でしか
+  呼ばれていない場合は、`getReferencesTo`が0件を返す（`ReferenceType`が`DATA`になっている
+  はず）ので、その場合はcdbでのライブブレークポイント（後述）に切り替えるのが早い。
 
 ## cdbでの動的解析（ライブブレークポイント）
 
