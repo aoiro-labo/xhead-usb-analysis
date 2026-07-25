@@ -448,6 +448,23 @@ dotnet run
 `Program.cs` の `DumpProperty`/`DumpDescriptor`/`DumpRange` が `msDescriptor.Fields` と
 `msPropertyRange.RangeValues[].StructDesc` を再帰的に辿って全体を出力する。
 
+### 続報7 (2026-07-26): `mnservice.exe`非依存の直接RF送出を実証（プロジェクトの集大成）
+
+[tools/usb_capture](../../tools/usb_capture)で解読したISDB-T変調レジスタマップと、
+`CmdChannelStart`時にネイティブ側が実際に発行するレジスタ書き込みの**順序**（cdbで
+rcx/r8/r9を直接ダンプして復元）を組み合わせ、[tools/direct_usb](../../tools/direct_usb)に
+`--configure`モードとして実装した。`mnservice.exe`プロセスを一切起動しない状態で
+このシーケンスを実機へ送ったところ、RTL-SDRループバックで**実際にRF電力上昇を確認**
+（473.02MHz付近で+33.9dB、470.35MHz付近で+33.8dB、2回のスキャンで±0.1dB以内の
+再現性）。詳細な書き込み順序・実測値・事実/推測の切り分けは
+[tools/direct_usb/README.md](../../tools/direct_usb/README.md)の「マイルストーン」節を参照。
+
+これにより、プロジェクトの当初目標だった「vendor DLL・`mnservice.exe`に一切依存しない
+自前実装での駆動」を、レジスタ解読からRF出力の実測検証まで含めて達成した。ただし
+バルク転送（TSストリーム）は一切送っていない状態での結果であり、出力されている信号が
+正しいISDB-T変調（有効なOFDMフレーム）を含んでいるかはビットレベルでは未検証——
+[tools/rtlsdr_analysis](../../tools/rtlsdr_analysis)で既知の限界と同じ。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

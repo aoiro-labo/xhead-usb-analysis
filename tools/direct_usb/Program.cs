@@ -36,18 +36,39 @@ namespace XHeadDirectUsb
         private static int Main(string[] args)
         {
             bool writeMode = false;
+            bool configureMode = false;
             ushort? writeAddr = null;
             uint? writeData = null;
+
+            uint freqKHz = 473000;
+            uint constellation = 1;   // QPSK
+            uint bandwidth = 6;
+            uint fft = 1;
+            uint coderate = 3;
+            uint guardinterval = 1;
+            uint timeinterleave = 3;
+            int dacgain = -10;
 
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--write") writeMode = true;
                 else if (args[i] == "--addr") writeAddr = Convert.ToUInt16(args[++i], 16);
                 else if (args[i] == "--data") writeData = Convert.ToUInt32(args[++i], 16);
+                else if (args[i] == "--configure") configureMode = true;
+                else if (args[i] == "--freq") freqKHz = Convert.ToUInt32(args[++i]);
+                else if (args[i] == "--constellation") constellation = Convert.ToUInt32(args[++i]);
+                else if (args[i] == "--bandwidth") bandwidth = Convert.ToUInt32(args[++i]);
+                else if (args[i] == "--fft") fft = Convert.ToUInt32(args[++i]);
+                else if (args[i] == "--coderate") coderate = Convert.ToUInt32(args[++i]);
+                else if (args[i] == "--guardinterval") guardinterval = Convert.ToUInt32(args[++i]);
+                else if (args[i] == "--timeinterleave") timeinterleave = Convert.ToUInt32(args[++i]);
+                else if (args[i] == "--dacgain") dacgain = Convert.ToInt32(args[++i]);
             }
 
             Console.WriteLine("=== XHeadDirectUsb: raw WinUSB register-bus probe (bypasses mnservice.exe) ===");
-            Console.WriteLine(writeMode ? "Mode: WRITE (explicit --write given)" : "Mode: READ-ONLY (default, safe)");
+            Console.WriteLine(writeMode ? "Mode: WRITE (explicit --write given)" :
+                configureMode ? "Mode: CONFIGURE (full ChannelStart write-sequence replay, bypasses mnservice.exe entirely)" :
+                "Mode: READ-ONLY (default, safe)");
             Console.Out.Flush();
 
             if (!OpenDevice())
@@ -59,7 +80,11 @@ namespace XHeadDirectUsb
 
             try
             {
-                if (writeMode)
+                if (configureMode)
+                {
+                    RunConfigureSequence(freqKHz, constellation, bandwidth, fft, coderate, guardinterval, timeinterleave, dacgain);
+                }
+                else if (writeMode)
                 {
                     if (writeAddr == null || writeData == null)
                     {
@@ -135,6 +160,83 @@ namespace XHeadDirectUsb
 
             Console.WriteLine("Done.");
             return 0;
+        }
+
+        /// <summary>
+        /// Replays the exact register-write sequence mnservice.exe issues during CmdChannelStart,
+        /// reconstructed from cdb captures (cdb_stdout14.log, corroborated by cdb_stdout17.log) by
+        /// breakpointing the native write helpers and dumping rcx/r8/r9 (address, data) per hit.
+        /// Includes several registers whose purpose is still unidentified (see tools/direct_usb/README.md
+        /// and tools/usb_capture/README.md) -- these are replayed with the exact constant values observed
+        /// in every capture, on the theory that fidelity to the real sequence is the safest way to trigger
+        /// whatever latch/state-machine behavior they gate, even without understanding them individually.
+        /// </summary>
+        private static void RunConfigureSequence(uint freqKHz, uint constellation, uint bandwidth, uint fft,
+            uint coderate, uint guardinterval, uint timeinterleave, int dacgain)
+        {
+            byte dacByte = unchecked((byte)dacgain);
+            uint dacPacked = (uint)((dacByte << 8) | dacByte);
+            uint extReg = 0x45585400u | 0x02; // observed as constant 0x45585402 in every capture; meaning unknown
+
+            Console.WriteLine("  Frequency=" + freqKHz + "kHz Constellation=" + constellation + " Bandwidth=" + bandwidth +
+                " FFT=" + fft + " CodeRate=" + coderate + " GuardInterval=" + guardinterval +
+                " TimeInterleavce=" + timeinterleave + " DACGain=" + dacgain);
+            Console.Out.Flush();
+
+            var seq = new (ushort addr, uint data, string label)[]
+            {
+                (0x0602, 1,          "unidentified (observed constant)"),
+                (0x0640, 3,          "unidentified (observed constant)"),
+                (0x0642, 0,          "unidentified (observed constant)"),
+                (0x0641, 1,          "unidentified (observed constant)"),
+                (0x0601, 5,          "unidentified (observed constant)"),
+                (0x1202, freqKHz,    "Frequency"),
+                (0x0600, 0x1000,     "unidentified (transitional state?)"),
+                (0x0681, 1,          "unidentified (observed constant)"),
+                (0x0682, 0,          "unidentified (observed constant)"),
+                (0x0683, 0,          "unidentified (observed constant)"),
+                (0x1202, freqKHz,    "Frequency (repeat, as observed)"),
+                (0x0681, 1,          "unidentified (repeat, as observed)"),
+                (0x0681, 1,          "unidentified (repeat, as observed)"),
+                (0x0682, 0,          "unidentified (repeat, as observed)"),
+                (0x0683, 0,          "unidentified (repeat, as observed)"),
+                (0x0680, 5,          "unidentified (observed constant)"),
+                (0x0690, constellation, "Constellation"),
+                (0x0684, bandwidth,     "Bandwidth"),
+                (0x0691, fft,           "FFT"),
+                (0x0693, coderate,      "CodeRate"),
+                (0x0692, guardinterval, "GuardInterval"),
+                (0x0694, timeinterleave,"TimeInterleavce"),
+                (0x0600, 1,          "unidentified (transitional state?)"),
+                (0x1228, 0,          "RF power bank, always 0"),
+                (0x1229, dacPacked,  "DACGain"),
+                (0x1221, 2,          "RF power bank, hardcoded literal 2"),
+                (0x1290, extReg,     "EXT-tagged register, meaning unknown"),
+                (0x1220, 0x78122901, "commit/strobe trigger (LSB=1)"),
+                (0x0629, 0,          "unidentified (post-commit)"),
+                (0x0629, 0,          "unidentified (post-commit, repeat)"),
+            };
+
+            foreach (var (addr, data, label) in seq)
+            {
+                SetAddress(addr);
+                Thread.Sleep(20);
+                WriteRegister(data);
+                Console.WriteLine($"  0x{addr:X4} <= 0x{data:X8}   ({label})");
+                Console.Out.Flush();
+                Thread.Sleep(20);
+            }
+
+            Console.WriteLine("Configure sequence complete. Reading back key registers...");
+            foreach (var addr in new ushort[] { 0x1202, 0x0690, 0x0684, 0x0691, 0x0693, 0x0692, 0x0694, 0x1229, 0x1220 })
+            {
+                SetAddress(addr);
+                Thread.Sleep(20);
+                var (echoAddr, data) = ReadRegister();
+                Console.WriteLine($"  0x{addr:X4} -> 0x{data:X8}");
+                Console.Out.Flush();
+                Thread.Sleep(20);
+            }
         }
 
         private static void SetAddress(ushort addr)
