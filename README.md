@@ -16,8 +16,8 @@
 | gRPCプロトコルの完全再構成（`.proto`、DLL非依存で再実装可能） | 完了 | [docs/protocol/README.md](docs/protocol/README.md) |
 | 実機からの変調パラメータ確定（FieldID・許容値） | 完了 | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) |
 | 独自送出ツール: 読み取り（プロパティツリーのダンプ） | 完了 | `tools/custom_sender` |
-| 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 完了 | `ChannelOpen`→`ProgramAdd/Commit`→**`ChannelStart`(Source構築前・全プロパティ群込み)**→`Source`構築→`ProgramApply`→`SourceStart`という正しいアーキテクチャを特定。`ProgramApply`成功、実際にPegasysエンコーダ・チャンネル出力が起動することをネイティブログで確認済み |
-| RTL-SDRループバックでの実信号検証 | 未着手（着手可能） | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出パイプラインは動作確認済みなのでいつでも着手できる。ただしRF電力(`mPSRFPowerAdjust.Level`)がデフォルト`0`のままの可能性あり |
+| 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 完了 | `ChannelOpen`→`ProgramAdd/Commit`→**`ChannelStart`(Source構築前・全プロパティ群込み)**→`Source`構築→`ProgramApply`→`SourceStart`という正しいアーキテクチャを特定。値の変更（Constellation・RF電力のPAGain/DACGain）が実際に物理層まで反映されることもネイティブログで実証済み |
+| RTL-SDRループバックでの実信号検証 | 未着手（着手可能） | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出パイプラインは値変更込みで動作確認済みなのでいつでも着手できる |
 | `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 未着手 | [tools/usb_capture](tools/usb_capture) |
 
 ## クイックリンク

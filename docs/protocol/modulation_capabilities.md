@@ -365,12 +365,37 @@ mpegasys_encode.cc:333] OK                                     ← エンコー�
 
 クラッシュなし、デバイス・サービスとも健全。`bad status`の壁は完全に突破した。
 
-**残課題**: `mPSRFPowerAdjust.Level`をデフォルトの`0`のままエコーバックしたため、RF出力電力が
-実質ゼロの可能性が高い。同軸直結のループバック環境なら検出できる可能性はあるが、実際に
-RTL-SDRで受信確認する際は`Level`を意図的に上げる必要があるかもしれない。次にやるべきことは
-(1) RTL-SDRでの実受信確認、(2) `mModulationParam`の値（Constellation等）を実際に変更して
-`ChannelStart`に反映させ、変更が本当に効くことを確認、(3) `mPSRFPowerAdjust.Level`を上げて
-信号強度を確認、の3点。
+### 続報5 (2026-07-25): 値の変更が実際に効くことを検証、RF電力の仕組みも解明
+
+続報4はサーバーが返してきたデフォルト値を**無変更のままエコーバック**しただけであり、
+「本当に値を変更して反映させられるか」はまだ未検証だった（このツールの本来の目的は公式GUIより
+自由度の高い設定なので、ここの検証が本質的に重要）。
+
+まず`mModulationParam.Constellation`(FieldID=19)をデフォルトのQAM64(3)からQPSK(1)に、
+`mPSRFPowerAdjust.Level`(FieldID=0)を`0`から`30`に変更して送ってみたところ、`ChannelStart`/
+`ProgramApply`/`SourceStart`は全て成功したが、ネイティブログの`adjust power : [00:00]`が
+**変化しなかった**。おかしいと思い`xPowerLevel.cs`（decompiled）を確認したところ、`Level`は
+そのまま使われる値ではなく、`level - 80`を添字とするテーブル引き（有効範囲は**80〜100**の21件
+のみ、範囲外だと公式アプリ側では`ArgumentOutOfRangeException`）であり、実際に物理層へ効くのは
+テーブルから引いた`PAGain`/`DACGain`の方だと判明した。周波数ごとに`RFPower473`/`RFPower569`/
+`RFPower707`という3本の21件テーブルがあり、`Level=30`は単に範囲外の無意味な値だった。
+
+`Frequency=473000`（テーブル`RFPower473`）・`Level=90`（添字`90-80=10`）で該当エントリ
+`PowerGain(PAGain=2, DACGain=-10)`を求め、`Level`/`PAGain`/`DACGain`の3つを揃えて送ったところ:
+
+```
+mpegasys_output.cc:260] adjust power : [f6:02]
+```
+
+`0xf6`は符号付き8bitで`-10`、`0x02`は`2`——つまり送った`DACGain=-10`/`PAGain=2`が**そのまま
+物理層に反映されている**ことを確認した。`Level`単体では何も起きず、`PAGain`/`DACGain`を
+テーブルに沿って計算して送る必要がある、というのが実際の仕様。`tools/custom_sender`の
+`SetPropertyValue`ヘルパーで、サーバーがエコーしてきたプロパティ列の特定フィールドだけを
+書き換えてから`ChannelStart`に送る、という汎用的な「一部だけ変更」パターンが確立できた。
+
+**現状**: プロトコルレベルでの送出・値変更は実証済み。残るは実機での意味的な検証、つまり
+RTL-SDRで実際に受信し、Constellation変更やRF電力変更が受信側でも観測できることを確認する
+ステップのみ。
 
 ## 取得方法（再現手順）
 

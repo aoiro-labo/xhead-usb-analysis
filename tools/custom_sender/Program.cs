@@ -468,6 +468,28 @@ namespace XHeadSender
             {
                 channelStartProps.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
             }
+
+            // Now that the echo-back-unchanged case is confirmed working end-to-end, verify we can
+            // actually CHANGE values and have them take effect (the whole point of this tool vs.
+            // the official GUI). Constellation is a visible/verifiable flip (QAM64(3) -> QPSK(1),
+            // confirmed live FieldID=19 under mModulationParam.Mode=ISDB_T).
+            //
+            // First attempt at raising RF power (Level=30) had ZERO effect ("adjust power :
+            // [00:00]" unchanged in the native log) -- decompiled xPowerLevel.cs revealed why:
+            // Level is not a direct gain value, it indexes a per-frequency lookup table via
+            // `level - 80` (valid range is only 80..100, 21 entries), and the *actual* physical
+            // knobs are PAGain/DACGain, computed client-side from that table and sent alongside
+            // Level -- setting Level alone without the matching PAGain/DACGain does nothing.
+            // Frequency 473000kHz -> RFPower473 table; Level=90 -> index (90-80)=10 ->
+            // PowerGain(PAGain=2, DACGain=-10).
+            SetPropertyValue(channelStartProps, "mModulationParam", 19, v => v.IntVal = 1);
+            SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 0, v => v.UintVal = 90);
+            SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 1, v => v.IntVal = 2);
+            SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 2, v => v.IntVal = -10);
+            Console.WriteLine("  Overriding before ChannelStart: mModulationParam.Constellation=QPSK(1), " +
+                "mPSRFPowerAdjust.Level=90/PAGain=2/DACGain=-10 (473000kHz table entry)");
+            Console.Out.Flush();
+
             var earlyStartReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
             earlyStartReq.Properties.AddRange(channelStartProps);
             msResponse earlyStartResp;
@@ -816,6 +838,19 @@ namespace XHeadSender
             {
                 Console.WriteLine($"  Set {propertyName}.FieldID={fieldId} -> RPC error: {ex.Status}");
             }
+        }
+
+        /// <summary>
+        /// Mutates a single msVariant (by group name + FieldID) in place within an
+        /// echoed-back property list, leaving every other field untouched. Throws if the
+        /// group/field isn't present -- callers should only target fields confirmed to exist via
+        /// a live property dump first.
+        /// </summary>
+        private static void SetPropertyValue(List<msPropertyParam> props, string groupName, uint fieldId, Action<msVariant> setter)
+        {
+            var group = props.First(p => p.Name == groupName);
+            var variant = group.Values.First(v => v.FieldID == fieldId);
+            setter(variant);
         }
 
         private static void DumpProperty(msProperty prop, int indent)
