@@ -399,6 +399,16 @@ Bandwidth/FFT/CodeRateマーカーテストで確認済みの標準シーケン�
 TS多重化・PSI/SI生成に関わるソフトウェア側のパラメータであり、RF変調そのものを担う
 ハードウェア（`mhal_modulation.cc`が触るレジスタ群）には無関係、という解釈が自然。
 
+**【2026-07-26追記・重要】この「安全」という結論は`RegionID`単体に限定して読むこと。**
+同日後半、`mMTSChannelParam`の別フィールド`BroadcasterID`を(既存値と同一の値へのno-op
+書き込みも含め)明示的に設定するテストで、`ChannelStart`が`mnservice.exe`をサービス全体
+ごとハングさせる重大な問題を発見した（`docs/protocol/modulation_capabilities.md`
+「続報14」）。`mMTSChannelParam`/`mMTSProgramParam`の複数のフィールド組み合わせが軒並み
+同じハングを再現しており、同じstruct内でもフィールドによって安全性が異なる可能性がある
+（あるいはこの`RegionID`単体テスト以降に`mnservice.exe`側の状態/バージョンが変わった
+可能性も否定できない）。**このグループのフィールドを新たに触る場合は、`RegionID`に限らず
+必ず個別に安全性を再確認すること**——「続報8」の結論を無条件に他フィールドへ拡張しない。
+
 これにより、残っている未解読アドレス（`0x0600`台の一部・`0x0629`・`0x0640`台・`0x0680`台）
 が`mMTSChannelParam`/`mPSEncodeParam`由来という当初の予想は**否定された**——少なくとも
 `mMTSChannelParam`は完全に除外できる。これら全てのマーカーテストを通じて、これらのアドレスは

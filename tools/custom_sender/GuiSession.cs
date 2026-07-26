@@ -150,6 +150,18 @@ namespace XHeadSender
                 Program.SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 1, v => v.IntVal = cfg.PAGain);
                 Program.SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 2, v => v.IntVal = cfg.DACGain);
 
+                // 2026-07-26: チャンネル/番組メタデータ(mMTSChannelParam/mMTSProgramParam)の上書きは
+                // 意図的に一切行わない -- ChannelOpenが返す既定値のまま完全に素通しする。実装直後の
+                // ライブテストで、この2グループのどのフィールドを明示的にSetPropertyValueしても
+                // (RegionID/BroadcasterID/RemoteControlKeyID/NetworkName/TSName/ServiceNo/CopyFlag/
+                // ServiceNameのどれを試しても、既存値と同一の値へのno-op書き込みでも)
+                // `ChannelStart`がgRPCの10秒デッドラインを超過してハングし、以降サービス全体が
+                // 新規リクエストを一切受け付けなくなる(`wait service timeout`)ことを確認済み
+                // (`tools/custom_sender --meta <subset>`で再現・記録、
+                // docs/protocol/modulation_capabilities.md「続報14」)。実機USBハードウェア自体は
+                // 毎回`direct_usb`の読み取り専用スキャンで健全と確認しており、この2グループへの
+                // 明示的な値変更が安全に行える状態になるまでは絶対に手を出さないこと。
+
                 Console.WriteLine($"[GUI] ChannelStart: Frequency={cfg.Frequency}kHz Constellation={cfg.Constellation} " +
                     $"Bandwidth={cfg.Bandwidth} FFT={cfg.FFT} CodeRate={cfg.CodeRate} GuardInterval={cfg.GuardInterval} " +
                     $"TimeInterleavce={cfg.TimeInterleavce} Level={cfg.Level} PAGain={cfg.PAGain} DACGain={cfg.DACGain}");

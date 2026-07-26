@@ -868,6 +868,58 @@ ready/ACKビットを待ち続けて戻ってこない）とで、ネイティ�
 弾かれるか、レジスタ書き込み後にチップ応答待ちでハングするか」は各モードの実装ごとの
 個別事情であり、複雑さでは予測できない。
 
+### 続報14 (2026-07-26): mMTSChannelParam/mMTSProgramParamへの明示的な書き込みは、どのフィールドでもサービスをハングさせる
+
+STUDIOパリティの広いロードマップに戻り、`tools/custom_sender`のGUIに「チャンネル/番組情報」
+タブ（サービス名・ネットワーク名・TS名・地域識別・放送事業者ID・リモコン番号・サービス
+番号・コピー制御——`mMTSChannelParam`/`mMTSProgramParam`のARIB_STD_B10サブ構造体）を追加
+する作業を行った。実装直後、送出前のライブ検証（`tools/custom_sender --meta <subset>`という
+専用の切り分けテストを新設）を行ったところ、**続報13のDTMB/J83Cと全く同じ「サービス
+ハング」が、この2プロパティグループのどのフィールドを触っても再現する**という重大な問題が
+判明した。
+
+**切り分けテストの結果（事実、全て`mnservice.exe`を毎回フルリスタートしたクリーンな状態で実施）**:
+
+| テスト内容 | 結果 |
+|---|---|
+| `mMTSChannelParam`全5フィールド (RegionID/BroadcasterID/RemoteControlKeyID/NetworkName/TSName) | ハング |
+| 上記の数値3フィールドのみ (RegionID/BroadcasterID/RemoteControlKeyID) | ハング |
+| `BroadcasterID`単体（テスト値5） | ハング |
+| `BroadcasterID`単体、**既存値と同一の値(1)へのno-op書き込み** | ハング |
+| `BroadcasterID`を除く全フィールド（RegionID/RemoteControlKeyID/NetworkName/TSName/`mMTSProgramParam`全3フィールド） | ハング |
+| `mMTSProgramParam`全3フィールド (ServiceNo/CopyFlag/ServiceName) 単体 | ハング |
+
+**重要な事実**: `BroadcasterID`を**既に持っている値と全く同じ値(1)に「書き込む」だけ**でも
+ハングする——つまり値の正当性の問題ではなく、**このプロパティ2グループのいずれかの
+フィールドを`ChannelStart`のリクエストで明示的に触れること自体**が、`mnservice.exe`の
+どこかの未知のコードパスを踏んでハングを引き起こしている。続報13のDTMB/J83Cと全く同じ
+症状（`ChannelStart`が10秒のgRPCデッドラインを超過→以降`wait service timeout`でサービス
+全体が新規リクエストを一切受け付けなくなる→プロセスは`Get-Process`上生存・
+`Responding=True`のままだが実質全機能停止）で、`direct_usb`の読み取り専用スキャンでは
+実機ハードウェアは6回のハング全てで健全なまま（レジスタ値は毎回既知の正常値、
+`Get-PnpDevice`も`Status=OK`のまま）だった。
+
+**過去の記録との矛盾**: `tools/usb_capture/README.md`には以前「`mMTSChannelParam.RegionID`
+にマーカー値(55)を設定してもクラッシュせず正常に完走した」という記録がある(別セッション、
+レジスタバス解析の文脈)。今回`RegionID`単体だけを切り出したテストはまだ実施していないため
+直接比較はできないが、**少なくとも`BroadcasterID`・`mMTSProgramParam`全体は今回明確に
+ハングを再現しており、以前の「安全」という結論を無条件にこの2グループ全体へ拡張しては
+いけない**。同じ`mMTSChannelParam`という1つのstructの中でも、フィールドによって安全性が
+異なる可能性がある(あるいは、その後のmnservice.exeのアップデート/環境変化で状況自体が
+変わった可能性も否定できない——未確定)。
+
+**対応**: GUI「チャンネル/番組情報」タブと、対応する`GuiSession.StartChannel()`の
+`SetPropertyValue`呼び出しを全て撤去した(未完成の機能を残さない方針)。`ModulationConfig`の
+関連フィールドも削除。CLIの切り分けテスト自体(`tools/custom_sender --meta <subset>`、
+`subset`は`all`/`channel`/`channel-num`/`channel-str`/`program`/`regionid`/`broadcasterid`/
+`broadcasterid-noop`/`broadcasterid-0`/`remotekey`)は今後の追加調査用に残してある。
+
+**未解決（今後の課題）**: `RegionID`単体、`RemoteControlKeyID`単体、`channel-str`単体
+(NetworkName/TSName)、`ServiceName`単体など、個々のフィールドに絞った切り分けはまだ
+未実施——「全フィールドが一律ハングする」のか「一部の安全なフィールドもあるが今回のテスト
+の組み合わせがたまたま毎回危険なフィールドを含んでいた」のかは、現時点では確定していない。
+再挑戦する場合は`--meta regionid`のように1フィールドずつ確認すること。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

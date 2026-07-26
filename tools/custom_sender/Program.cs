@@ -268,6 +268,12 @@ namespace XHeadSender
                             {
                                 RunColorbarTest(client, msClient, firstModulationOutputHandle, watcher);
                             }
+                            else if (args.Contains("--meta"))
+                            {
+                                int subIdx = Array.IndexOf(args, "--meta");
+                                string subset = subIdx + 1 < args.Length && !args[subIdx + 1].StartsWith("--") ? args[subIdx + 1] : "all";
+                                RunChannelMetadataTest(client, msClient, firstModulationOutputHandle, watcher, subset);
+                            }
                             else if (NonIsdbTModes.Any(m => args.Contains("--" + m.ModeName.ToLowerInvariant().Replace("_", ""))))
                             {
                                 var spec = NonIsdbTModes.First(m => args.Contains("--" + m.ModeName.ToLowerInvariant().Replace("_", "")));
@@ -759,6 +765,127 @@ namespace XHeadSender
         /// RunFullPipelineTest (duplicated rather than refactored out, to avoid touching that
         /// already-proven method), diverging only at Source setup.
         /// </summary>
+        /// <summary>
+        /// 2026-07-26: live verification for the channel/program metadata fields just added to
+        /// the GUI (mMTSChannelParam.RegionID/BroadcasterID/RemoteControlKeyID/NetworkName/TSName,
+        /// mMTSProgramParam.ServiceNo/CopyFlag/ServiceName -- the GUI's "チャンネル/番組情報" tab).
+        /// Uses distinctive non-default values so a ResultSuccess here confirms the FieldIDs/types
+        /// are genuinely accepted by the server (SetPropertyValue throws loudly on a wrong FieldID
+        /// before ever reaching the network, so this specifically exercises the wire-level
+        /// acceptance, which is the part GuiSession.StartChannel's new code could actually get
+        /// wrong). Early ChannelStart only, no Source -- same minimal-risk shape as the other Mode
+        /// tests.
+        /// </summary>
+        private static void RunChannelMetadataTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher, string subset = "all")
+        {
+            uint clientId = msClient.HandleID;
+            Console.WriteLine();
+            Console.WriteLine("=== Channel/Program metadata test ===");
+            Console.Out.Flush();
+
+            var openReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdChannelOpen,
+                ClientID = clientId,
+                HandleID = outputHandle,
+                Channel = new msChannelParam { Name = "XHeadSenderMetaTest" }
+            };
+            var openResp = client.sendRequest(openReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ChannelOpen: Result={openResp.Result} ParamCase={openResp.ParamCase}");
+            if (openResp.ParamCase != msResponse.ParamOneofCase.Channel) return;
+            uint chHandle = openResp.Channel.HandleID;
+
+            var addReq = new msRequest { Cmd = msServiceCmd.CmdProgramAdd, ClientID = clientId, HandleID = chHandle };
+            var addResp = client.sendRequest(addReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramAdd: Result={addResp.Result} ParamCase={addResp.ParamCase}");
+            if (addResp.ParamCase != msResponse.ParamOneofCase.Program)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            int programIndex = addResp.Program.Index;
+
+            var commitReq = new msRequest { Cmd = msServiceCmd.CmdProgramCommit, ClientID = clientId, HandleID = chHandle, Index = programIndex };
+            foreach (var prop in addResp.Program.Properties)
+            {
+                commitReq.Properties.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+            var commitResp = client.sendRequest(commitReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramCommit: Result={commitResp.Result}");
+            if (commitResp.Result != msResult.ResultSuccess)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+
+            var channelStartProps = new List<msPropertyParam>();
+            foreach (var prop in openResp.Channel.Properties)
+            {
+                channelStartProps.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+
+            if (subset == "all" || subset == "channel" || subset == "channel-num" || subset == "regionid" || subset == "safe")
+            {
+                SetPropertyValue(channelStartProps, "mMTSChannelParam", 4, v => v.UintVal = 30);
+            }
+            if (subset == "all" || subset == "channel" || subset == "channel-num" || subset == "broadcasterid")
+            {
+                SetPropertyValue(channelStartProps, "mMTSChannelParam", 5, v => v.UintVal = 5);
+            }
+            if (subset == "broadcasterid-noop")
+            {
+                SetPropertyValue(channelStartProps, "mMTSChannelParam", 5, v => v.UintVal = 1); // same as current echoed value -- identity write
+            }
+            if (subset == "broadcasterid-0")
+            {
+                SetPropertyValue(channelStartProps, "mMTSChannelParam", 5, v => v.UintVal = 0);
+            }
+            if (subset == "all" || subset == "channel" || subset == "channel-num" || subset == "remotekey" || subset == "safe")
+            {
+                SetPropertyValue(channelStartProps, "mMTSChannelParam", 6, v => v.UintVal = 7);
+            }
+            if (subset == "all" || subset == "channel" || subset == "channel-str" || subset == "safe")
+            {
+                SetPropertyValue(channelStartProps, "mMTSChannelParam", 7, v => v.StrVal = "TESTNET");
+                SetPropertyValue(channelStartProps, "mMTSChannelParam", 8, v => v.StrVal = "TESTTS");
+            }
+            if (subset == "all" || subset == "program" || subset == "safe")
+            {
+                SetPropertyValue(channelStartProps, "mMTSProgramParam", 8, v => v.UintVal = 3);
+                SetPropertyValue(channelStartProps, "mMTSProgramParam", 11, v => v.IntVal = 2);
+                SetPropertyValue(channelStartProps, "mMTSProgramParam", 12, v => v.StrVal = "TESTCH");
+            }
+            Console.WriteLine($"  [subset={subset}] applied metadata overrides.");
+            Console.Out.Flush();
+
+            var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
+            startReq.Properties.AddRange(channelStartProps);
+            msResponse startResp;
+            try
+            {
+                startResp = client.sendRequest(startReq, deadline: DateTime.UtcNow.AddSeconds(10));
+                Console.WriteLine($"  ChannelStart: Result={startResp.Result} Status={startResp.Status} ParamCase={startResp.ParamCase}" +
+                    (startResp.HasErrMessage ? $" ErrMessage={startResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  ChannelStart RPC error: {ex.Status}");
+                startResp = null;
+            }
+            Console.Out.Flush();
+
+            if (startResp != null && startResp.Result == msResult.ResultSuccess)
+            {
+                Console.WriteLine("  *** ChannelStart SUCCEEDED with custom channel/program metadata. Holding 3s... ***");
+                Thread.Sleep(3000);
+                var stopReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };
+                var stopResp = client.sendRequest(stopReq, deadline: DateTime.UtcNow.AddSeconds(5));
+                Console.WriteLine($"  ChannelStop: Result={stopResp.Result}");
+            }
+
+            CloseChannel(client, clientId, chHandle);
+        }
+
         private static void RunColorbarTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher)
         {
             uint clientId = msClient.HandleID;

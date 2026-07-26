@@ -105,15 +105,7 @@ namespace XHeadSender
             btnPanel.Controls.Add(_btnStop);
             btnPanel.Controls.Add(_btnDisconnect);
 
-            var sourceGroup = new GroupBox
-            {
-                Text = "ソース",
-                Dock = DockStyle.Top,
-                Padding = new Padding(10, 4, 6, 10),
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            };
-            var sourceLayout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true };
+            var sourceLayout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true, Padding = new Padding(10, 10, 6, 10) };
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -141,19 +133,17 @@ namespace XHeadSender
             sourceLayout.Controls.Add(_rbSourceNone, 0, 0);
             sourceLayout.Controls.Add(_rbSourceCapture, 0, 1);
             sourceLayout.Controls.Add(urlRow, 0, 2);
-            sourceGroup.Controls.Add(sourceLayout);
 
-            var logLabel = new Label { Dock = DockStyle.Top, Height = 22, Text = "ログ:", Padding = new Padding(8, 6, 0, 0) };
+            // 2026-07-26: チャンネル/番組メタデータ(mMTSChannelParam/mMTSProgramParam)を編集する
+            // タブを一度実装したが、ライブテストでどのフィールドを明示的に上書きしても
+            // (既存値と同一のno-op書き込みですら)ChannelStartがmnservice.exe全体をハングさせる
+            // ことが判明し、安全に動作させられないため撤去した。詳細は
+            // docs/protocol/modulation_capabilities.md「続報14」、GuiSession.StartChannel()の
+            // コメントを参照。復活させる場合は、まずCLIの`--meta <subset>`で個々のフィールドが
+            // 安全であることを確認してから。
 
-            var modGroup = new GroupBox
-            {
-                Text = "変調パラメータ",
-                Dock = DockStyle.Top,
-                Padding = new Padding(10, 4, 6, 10),
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            };
             var modLayout = NewParamTable();
+            modLayout.Padding = new Padding(10, 10, 6, 4);
             _numFrequency = AddNumeric(modLayout, "周波数 (kHz)", 0, 1000000, 473000,
                 "送出する中心周波数(kHz)。既定の473000kHzはUHF473MHz(ISDB-Tの標準チャンネルの1つ)。");
             _cmbConstellation = AddCombo(modLayout, "変調方式", new[]
@@ -192,17 +182,20 @@ namespace XHeadSender
                 new ComboItem(2, "モード2"),
                 new ComboItem(3, "モード3 (既定)"),
             }, 2, "時間インターリーブの深さ。深いほどバースト誤りに強いが遅延が増える。");
-            modGroup.Controls.Add(modLayout);
 
-            var powerGroup = new GroupBox
+            // RF電力設定は変調パラメータと同じタブにまとめる(どちらもRF/OFDM物理層の設定なので)。
+            // 区切りを分かるよう小見出しラベルを挟む。
+            var powerHeader = new Label
             {
-                Text = "RF電力設定",
                 Dock = DockStyle.Top,
-                Padding = new Padding(10, 4, 6, 10),
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                AutoSize = false,
+                Height = 24,
+                Text = "RF電力設定",
+                Font = new Font(Font, FontStyle.Bold),
+                Padding = new Padding(10, 8, 0, 0),
             };
             var powerLayout = NewParamTable();
+            powerLayout.Padding = new Padding(10, 4, 6, 10);
             _numLevel = AddNumeric(powerLayout, "Level (80〜100)", 80, 100, 90,
                 "周波数ごとのPA/DACゲイン表を引く際の添字(80〜100)。Level単体では出力に変化なし --"
                 + "PAGain/DACGainと必ず一緒に送ること。");
@@ -211,8 +204,22 @@ namespace XHeadSender
                 + "2026-07-26の解析でmCalibrationという較正テーブルと突き合わせて使われている可能性が判明。");
             _numDACGain = AddNumeric(powerLayout, "DACGain", -128, 127, -10,
                 "DACの生ゲイン値(int8)。RF出力電力に直接反映されることを実機ログとRTL-SDRで確認済み。");
-            powerGroup.Controls.Add(powerLayout);
 
+            // 変調パラメータ + RF電力設定の1タブ分。同じDockStyle.Topの重なり順の都合上、
+            // ここも逆順でAddする(modLayoutが一番上、powerLayoutが一番下に来てほしい)。
+            var modTab = new TabPage("変調/RF電力設定") { AutoScroll = true };
+            modTab.Controls.Add(powerLayout);
+            modTab.Controls.Add(powerHeader);
+            modTab.Controls.Add(modLayout);
+
+            var sourceTab = new TabPage("ソース") { AutoScroll = true };
+            sourceTab.Controls.Add(sourceLayout);
+
+            var tabControl = new TabControl { Dock = DockStyle.Fill };
+            tabControl.TabPages.Add(sourceTab);
+            tabControl.TabPages.Add(modTab);
+
+            var logLabel = new Label { Dock = DockStyle.Top, Height = 22, Text = "ログ:", Padding = new Padding(8, 6, 0, 0) };
             _txtLog = new TextBox
             {
                 Multiline = true,
@@ -221,16 +228,17 @@ namespace XHeadSender
                 Dock = DockStyle.Fill,
                 Font = new Font(FontFamily.GenericMonospace, 8.5f),
             };
+            var logPanel = new Panel { Dock = DockStyle.Bottom, Height = 180 };
+            logPanel.Controls.Add(_txtLog);
+            logPanel.Controls.Add(logLabel);
 
-            // 実際の画面上での見た目(上から): 警告 -> 状態 -> ボタン -> キャプチャ添付チェック
-            // -> 変調パラメータ -> RF電力設定 -> "ログ:" -> ログ欄。注意: 同じDockStyle.Top
-            // 同士では、後からControls.Addした方が画面上は上に来る(直感と逆)。そのためこの
-            // 一括Addは視覚順とは逆順で書く。
-            Controls.Add(_txtLog);
-            Controls.Add(logLabel);
-            Controls.Add(powerGroup);
-            Controls.Add(modGroup);
-            Controls.Add(sourceGroup);
+            // 実際の画面上での見た目(上から): 警告 -> 状態 -> ボタン -> [タブ(ソース/チャンネル
+            // 番組情報/変調・RF電力設定)が残り領域いっぱい] -> ログ欄(下端に固定高さで常時表示)。
+            // 注意: 同じDockStyle.Top同士では、後からControls.Addした方が画面上は上に来る
+            // (直感と逆)。Dock=Fillは、Top/Bottomが確保した後の残り領域を埋めるため、一番最初に
+            // Addする必要がある。そのためこの一括Addは視覚順とは逆順で書く。
+            Controls.Add(tabControl);
+            Controls.Add(logPanel);
             Controls.Add(btnPanel);
             Controls.Add(_lblStatus);
             Controls.Add(warnLabel);
