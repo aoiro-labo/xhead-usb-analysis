@@ -472,6 +472,69 @@ RTL-SDRで観測可能な変化は一切なかった（[tools/direct_usb/README.
 （周波数・変調方式等）だけで決まる搬送波/アイドルパターンを見ている可能性が高いという
 推測を補強する結果——ただし通知なしでは無視されるだけの可能性も残り、未確定。
 
+### 続報8 (2026-07-26): 第三のSourceMode「Transcode」でカラーバー/サイントーンを自己完結生成
+
+`mnClientDotNet.dll`を.NETリフレクションで調べたところ、これまで使ってきた`SourceUrl`
+（ファイル、Content取得で頓挫）・`SourceCapture`（デスクトップキャプチャ、動作実証済み）に
+加えて、**`msSourceMode.SourceTranscode`という第三のソースモード**が存在すると判明した。
+`msSourceParam.Transcode`(`msTranscodeParam`型)は:
+
+- `Colorbar`(`msColorbarMode`): `Testsrc2`/`Smptebars`/`Smptehdbars`/`Pal75bars`/
+  `Pal100bars`/`Black`の6種類（`Smptebars`等の名前はFFmpegのlavfiソースフィルタ名と
+  一致しており、内部でFFmpegを使って生成していると見られる——実際、動作中のログにも
+  `mhal_ffmpeg.cc`/`ffmpeg timer pool start`が出現する）
+- `SineTone`(`msSineToneMode`): `Mute`/`Beep`/`NoBeep` — 音声側のテストトーン
+- `Video`/`Audio`: 解像度・フレームレート・コーデック・サンプルレート等
+
+外部ファイルも画面キャプチャも不要な、完全自己完結型の試験信号ソースである。
+
+**必須の実装上の注意（実機テストで判明、事実）**:
+
+1. **`Engine`フィールドは`0`（未指定）を受け付けない** — `ProgramApply`の
+   `msMediaContent.EngineID`と同じ実在のEngine HandleIDを明示的に指定する必要がある
+   （`0`だと`UNAVAILABLE: engine [00000000] not exists`で拒否される）。
+2. **`Video.Codec`/`Audio.Codec`に生（Raw）フォーマットは使えない** — 最初
+   `RawYuv420P`/`PcmS16`で試したところ、`nvidia_cuvid`・`microsoft_d3d11va`の**両エンジンで
+   共通に**`engine not supported transcode format`と拒否された。原因は逆コンパイル済み公式
+   クライアントラッパー(`decompiled/mnClientDotNet/mnFramework/mnTranscodeParam.cs`)の
+   `implicit operator bool`に明記されていた——`Video.Codec==RawVideo`・
+   `Audio.Codec==RawAudio`は明示的に無効値として拒否するバリデーションが存在する。
+   同ファイルのデフォルトコンストラクタが使う値（`Video.Codec=H264`・
+   `Video.FrameStruct=Interlaced`・`Audio.Codec=MP1_L2`・`QueueTime=1000`）にそのまま
+   合わせたところ、フォーマット検証は通過した。
+
+**実機での結果（部分的成功、事実）**: 上記の修正版で`ChannelOpen→ProgramAdd/Commit→
+ChannelStart→SourceOpen(Transcode/Colorbar)`を実行したところ、`mnservice.exe`のログには
+以下が記録された:
+
+```
+mff_hardware.cc:92] codec [h264_nvenc:cuda:00000002]     ← H264ハードウェアエンコーダ初期化成功
+mnchannel.cc:337] channel [02000001] start output         ← チャンネルが出力開始
+mmts_source.cc:133] [0110] - 1583  /  [0111] - 988         ← パケットカウンタが1分以上増加し続けた
+```
+
+この間にRTL-SDRでスキャンしたところ、**470〜476MHz帯に+34〜35dBの電力上昇を実測**——
+`Level=90`/`DACGain=-10`の設定と、これまでの検証済みRF出力と一致するシグネチャ。
+つまり**カラーバー/サイントーンの自己完結ソースは実機で確かに機能し、実際にRF出力まで
+到達している**。
+
+一方で、**クライアント側は`SourceOpen`の応答受信時に`Unknown: Unexpected error in RPC
+handling`という例外を投げてしまい、応答からSourceのHandleIDを受け取れない**——上記の
+サーバー側ログ（エンコーダ起動・チャンネル出力開始・パケット流動）はこの例外の**後に**
+記録されたものであり、サーバー側の処理自体は成功しているにもかかわらず、応答の
+シリアライズ/デシリアライズのどこかで問題が起きている（原因未特定）。この結果、
+クライアントからそのSourceを正常に停止できず、`mnservice.exe`を再起動するまで
+孤立したまま動き続けた（実害はなし、実機・サービスとも健全性を維持）。
+
+**現状のまとめ（事実と未解決を明記）**:
+- 事実: `SourceTranscode`/`Colorbar`は実在し、正しいフォーマットを指定すれば実機で
+  RF出力まで到達する。
+- 未解決: `SourceOpen`応答の受信でクライアント側が例外を投げる問題は原因未特定。
+  この応答パースの問題を直せば、`tools/custom_sender`にmnservice.exe/vendor DLL経由での
+  完全に自己完結した「テストパターン送出ボタン」を追加できる見込みが高い。
+
+再現コードは`tools/custom_sender/Program.cs`の`RunColorbarTest`（`--colorbar`引数で起動）。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

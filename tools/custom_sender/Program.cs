@@ -264,7 +264,14 @@ namespace XHeadSender
                             // properties ride along with CmdChannelStart, not Open. Calling
                             // ChannelStart with no Source/Content attached crashes mnservice.exe
                             // natively (confirmed 2026-07-24) -- so wire up a real Source first.
-                            RunFullPipelineTest(client, msClient, firstModulationOutputHandle, watcher);
+                            if (args.Contains("--colorbar"))
+                            {
+                                RunColorbarTest(client, msClient, firstModulationOutputHandle, watcher);
+                            }
+                            else
+                            {
+                                RunFullPipelineTest(client, msClient, firstModulationOutputHandle, watcher);
+                            }
                         }
                         else if (openResp.ParamCase == msResponse.ParamOneofCase.ErrMessage)
                         {
@@ -712,6 +719,286 @@ namespace XHeadSender
                 // CmdChannelStart here. Source is now live and attached to the already-running
                 // channel/encoder pipeline; just give it a moment to actually flow before cleanup.
                 Console.WriteLine("  *** Source is running with real content attached to the already-started channel! Check RTL-SDR now. Waiting 8s... ***");
+                Console.Out.Flush();
+                Thread.Sleep(8000);
+            }
+
+            var stopChReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };
+            var stopChResp = client.sendRequest(stopChReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ChannelStop: Result={stopChResp.Result}");
+
+            var sourceStopReq = new msRequest { Cmd = msServiceCmd.CmdSourceStop, ClientID = clientId, HandleID = src.HandleID };
+            client.sendRequest(sourceStopReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            CloseSource(client, clientId, src.HandleID);
+            CloseChannel(client, clientId, chHandle);
+        }
+
+        /// <summary>
+        /// 2026-07-26: reflecting over mnClientDotNet.dll found a THIRD source mode beyond
+        /// SourceUrl(file, stuck on async Content probing)/SourceCapture(desktop capture, proven
+        /// working) -- msSourceMode.SourceTranscode, whose msTranscodeParam carries a `Colorbar`
+        /// field (msColorbarMode: Testsrc2/Smptebars/Smptehdbars/Pal75bars/Pal100bars/Black) plus
+        /// a `SineTone` field (msSineToneMode: Mute/Beep/NoBeep) -- a fully self-contained
+        /// synthetic test-pattern source needing no file, no capture device, no async probing.
+        /// Untested until now. Same ChannelOpen/ProgramAdd/Commit/ChannelStart-early sequence as
+        /// RunFullPipelineTest (duplicated rather than refactored out, to avoid touching that
+        /// already-proven method), diverging only at Source setup.
+        /// </summary>
+        private static void RunColorbarTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher)
+        {
+            uint clientId = msClient.HandleID;
+            Console.WriteLine();
+            Console.WriteLine("=== Colorbar test: ChannelOpen -> ProgramAdd/Commit -> ChannelStart -> SourceOpen(Transcode/Colorbar) -> ProgramApply -> SourceStart ===");
+            Console.Out.Flush();
+
+            var openReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdChannelOpen,
+                ClientID = clientId,
+                HandleID = outputHandle,
+                Channel = new msChannelParam { Name = "XHeadSenderColorbarTest" }
+            };
+            var openResp = client.sendRequest(openReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ChannelOpen: Result={openResp.Result} ParamCase={openResp.ParamCase}" +
+                (openResp.HasErrMessage ? $" ErrMessage={openResp.ErrMessage}" : ""));
+            if (openResp.ParamCase != msResponse.ParamOneofCase.Channel) return;
+            uint chHandle = openResp.Channel.HandleID;
+
+            var addReq = new msRequest { Cmd = msServiceCmd.CmdProgramAdd, ClientID = clientId, HandleID = chHandle };
+            var addResp = client.sendRequest(addReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramAdd: Result={addResp.Result} ParamCase={addResp.ParamCase}" +
+                (addResp.HasErrMessage ? $" ErrMessage={addResp.ErrMessage}" : ""));
+            if (addResp.ParamCase != msResponse.ParamOneofCase.Program)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            int programIndex = addResp.Program.Index;
+
+            var commitReq = new msRequest { Cmd = msServiceCmd.CmdProgramCommit, ClientID = clientId, HandleID = chHandle, Index = programIndex };
+            foreach (var prop in addResp.Program.Properties)
+            {
+                commitReq.Properties.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+            var commitResp = client.sendRequest(commitReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramCommit: Result={commitResp.Result}" +
+                (commitResp.HasErrMessage ? $" ErrMessage={commitResp.ErrMessage}" : ""));
+            if (commitResp.Result != msResult.ResultSuccess)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+
+            var channelStartProps = new List<msPropertyParam>();
+            foreach (var prop in openResp.Channel.Properties)
+            {
+                channelStartProps.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+            SetPropertyValue(channelStartProps, "mModulationParam", 19, v => v.IntVal = 1);
+            SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 0, v => v.UintVal = 90);
+            SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 1, v => v.IntVal = 2);
+            SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 2, v => v.IntVal = -10);
+            Console.WriteLine("  Overriding before ChannelStart: mModulationParam.Constellation=QPSK(1), " +
+                "mPSRFPowerAdjust.Level=90/PAGain=2/DACGain=-10 (473000kHz table entry, known-good baseline)");
+
+            var earlyStartReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
+            earlyStartReq.Properties.AddRange(channelStartProps);
+            msResponse earlyStartResp;
+            try
+            {
+                earlyStartResp = client.sendRequest(earlyStartReq, deadline: DateTime.UtcNow.AddSeconds(10));
+                Console.WriteLine($"  ChannelStart(early): Result={earlyStartResp.Result} Status={earlyStartResp.Status} ParamCase={earlyStartResp.ParamCase}" +
+                    (earlyStartResp.HasErrMessage ? $" ErrMessage={earlyStartResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  ChannelStart(early) RPC error: {ex.Status}");
+                earlyStartResp = null;
+            }
+            if (earlyStartResp == null || earlyStartResp.Result != msResult.ResultSuccess)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            Console.WriteLine("  *** ChannelStart(early) SUCCEEDED. Opening a Transcode/Colorbar source (self-contained, no file/capture needed)... ***");
+            Console.Out.Flush();
+
+            // First attempt used Engine=0 and got "UNAVAILABLE: engine [00000000] not exists" --
+            // msTranscodeParam.Engine needs a real Engine HandleID (same as msMediaContent.EngineID
+            // used later for ProgramApply), not a 0-means-auto sentinel. Second/third attempts (with
+            // nvidia_cuvid, then microsoft_d3d11va) both got "engine not supported transcode format"
+            // -- turned out to be a raw-codec validation rejection, not an engine problem (see the
+            // Video/Audio codec comment below). Back to preferring nvidia_cuvid, same as the proven
+            // desktop-capture pipeline (RunFullPipelineTest).
+            var chosenEngine = msClient.Engines.FirstOrDefault(e =>
+                (e.Name?.IndexOf("nvidia", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (e.Name?.IndexOf("cuvid", StringComparison.OrdinalIgnoreCase) >= 0))
+                ?? (msClient.Engines.Count > 0 ? msClient.Engines[0] : null);
+            Console.WriteLine($"  Chosen engine: HandleID={chosenEngine?.HandleID} Name={chosenEngine?.Name}");
+
+            // "engine not supported transcode format" on the first two attempts (RawYuv420P video /
+            // PcmS16 audio, tried against both nvidia_cuvid and microsoft_d3d11va) turned out to be
+            // a real validation rule, not an engine-choice problem: the decompiled official client
+            // wrapper (mnTranscodeParam, decompiled/mnClientDotNet/mnFramework/mnTranscodeParam.cs)
+            // has an `implicit operator bool` that explicitly REJECTS Video.Codec==RawVideo and
+            // Audio.Codec==RawAudio -- raw formats are disallowed here, only encoded codecs are
+            // valid. Its default constructor uses H264/Interlaced video and MP1_L2 audio; matching
+            // those exactly (plus QueueTime=1000, which the default ctor sets and this code
+            // previously left at 0) below.
+            var transcode = new msTranscodeParam
+            {
+                Engine = chosenEngine?.HandleID ?? 0,
+                QueueTime = 1000,
+                Colorbar = msColorbarMode.ColorbarSmptehdbars,
+                Video = new msVideo
+                {
+                    Codec = msVideoCodec.H264,
+                    Width = 1920,
+                    Height = 1080,
+                    FrameStruct = msFrameStructure.Interlaced,
+                    FrameRate = msFrameRate.Fps2997,
+                },
+                VideoBitrate = 15000000,
+                AudioCount = 1,
+                SineTone = msSineToneMode.SineToneNoBeep,
+                Audio = new msAudio
+                {
+                    Codec = msAudioCodec.Mp1L2,
+                    SampleRate = 48000,
+                    Channel = msAudioChannel.Stereo,
+                },
+                AudioBitrate = 128000,
+            };
+            var sourceOpenReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdSourceOpen,
+                ClientID = clientId,
+                Source = new msSourceParam { Mode = msSourceMode.SourceTranscode, Name = "XHeadSenderColorbar", Transcode = transcode }
+            };
+            msResponse sourceResp;
+            try
+            {
+                sourceResp = client.sendRequest(sourceOpenReq, deadline: DateTime.UtcNow.AddSeconds(10));
+            }
+            catch (RpcException ex)
+            {
+                // KNOWN ISSUE (2026-07-26): with the corrected H264/MP1_L2 format below, this call
+                // reliably throws "Unknown: Unexpected error in RPC handling" on the CLIENT side --
+                // but mnservice.exe's own log shows the operation actually SUCCEEDED server-side
+                // regardless: encoder init (mff_hardware.cc "codec [h264_nvenc:cuda:...]"),
+                // "channel [...] start output", and mmts_source.cc packet counters incrementing
+                // continuously for over a minute. RTL-SDR confirmed real RF output during that
+                // window (+34-35dB across 470-476MHz, matching the known ISDB-T signature) --
+                // i.e. the colorbar/transcode pipeline genuinely works, only the SourceOpen
+                // *response* fails to reach this client cleanly (root cause not yet found -- some
+                // field in msSource's response likely doesn't (de)serialize cleanly on this client
+                // version). Consequence: we never learn the Source's HandleID, so it can't be
+                // cleanly stopped/closed from here -- it's left running until mnservice.exe is
+                // restarted. Documented in tools/custom_sender/README-equivalent notes; do not
+                // treat this exception as "the feature doesn't work".
+                Console.WriteLine($"  SourceOpen(Transcode) RPC error: {ex.Status}");
+                Console.WriteLine("  NOTE: mnservice.exe's own log has shown this to succeed server-side despite this " +
+                    "client-side error (see comment above) -- the Source may now be running orphaned. " +
+                    "Restart mnservice.exe to clean it up if needed.");
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            Console.WriteLine($"  SourceOpen(Transcode): Result={sourceResp.Result} ParamCase={sourceResp.ParamCase}" +
+                (sourceResp.HasErrMessage ? $" ErrMessage={sourceResp.ErrMessage}" : ""));
+            Console.Out.Flush();
+            if (sourceResp.ParamCase != msResponse.ParamOneofCase.Source)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            var src = sourceResp.Source;
+            Console.WriteLine($"  Source: HandleID={src.HandleID} Status={src.Status} Mode={src.Mode} ContentPrograms={src.Content?.Programs.Count ?? 0}");
+
+            // Synthetic source -- no external file/device to probe, so Content may well already be
+            // populated in this very response (unlike SourceUrl). Wait for StatusReady via the
+            // event stream regardless, same proven mechanism as the Capture path, in case it's not.
+            msEventStatus finalStatus;
+            if ((src.Content?.Programs.Count ?? 0) > 0 && src.Status == msStatus.StatusReady)
+            {
+                Console.WriteLine("  Content already populated synchronously in the SourceOpen response -- no wait needed.");
+                finalStatus = null;
+            }
+            else
+            {
+                Console.WriteLine("  Waiting for EventSourceStatus to reach StatusReady (up to 10s)...");
+                Console.Out.Flush();
+                finalStatus = watcher.WaitForStatusReady(src.HandleID, TimeSpan.FromSeconds(10));
+                Console.WriteLine($"  Source status after wait: {finalStatus?.Status} ContentPrograms={finalStatus?.Content?.Programs.Count ?? 0}");
+            }
+
+            var programsSource = (finalStatus?.Content?.Programs.Count ?? 0) > 0 ? finalStatus.Content.Programs
+                : src.Content?.Programs;
+            if ((programsSource?.Count ?? 0) == 0)
+            {
+                Console.WriteLine("  Source never reported Content -- aborting.");
+                CloseSource(client, clientId, src.HandleID);
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            var srcProgram = programsSource[0];
+            Console.WriteLine($"  Source's Program ID={srcProgram.ID} Streams={srcProgram.Streams.Count}");
+            foreach (var s in srcProgram.Streams) Console.WriteLine($"    Stream Index={s.Index} ID={s.ID} Format={s.Format}");
+            Console.Out.Flush();
+
+            var content = new msMediaContent
+            {
+                Index = 0,
+                Param = new msMediaParam { Functions = msMediaFunction.MediaNone },
+                SourceID = src.HandleID,
+                ProgramID = srcProgram.ID,
+                EngineID = chosenEngine?.HandleID ?? 0
+            };
+            foreach (var s in srcProgram.Streams)
+            {
+                var contentStream = new msMediaContent.Types.Stream { Index = s.Index };
+                contentStream.Nodes.Add(new msMediaContent.Types.Node { Mode = msMediaContent.Types.NodeMode.NodePassthrough });
+                content.Streams.Add(contentStream);
+            }
+
+            var applyReq = new msRequest { Cmd = msServiceCmd.CmdProgramApply, ClientID = clientId, HandleID = chHandle, Content = content };
+            msResponse applyResp;
+            try
+            {
+                applyResp = client.sendRequest(applyReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine($"  ProgramApply: Result={applyResp.Result}" +
+                    (applyResp.HasErrMessage ? $" ErrMessage={applyResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  ProgramApply RPC error: {ex.Status}");
+                applyResp = null;
+            }
+            Console.Out.Flush();
+            if (applyResp == null || applyResp.Result != msResult.ResultSuccess)
+            {
+                CloseSource(client, clientId, src.HandleID);
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+
+            var sourceStartReq = new msRequest { Cmd = msServiceCmd.CmdSourceStart, ClientID = clientId, HandleID = src.HandleID };
+            msResponse sourceStartResp;
+            try
+            {
+                sourceStartResp = client.sendRequest(sourceStartReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine($"  SourceStart: Result={sourceStartResp.Result} Status={sourceStartResp.Status}" +
+                    (sourceStartResp.HasErrMessage ? $" ErrMessage={sourceStartResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  SourceStart RPC error: {ex.Status}");
+                sourceStartResp = null;
+            }
+            Console.Out.Flush();
+
+            if (sourceStartResp != null && sourceStartResp.Result == msResult.ResultSuccess)
+            {
+                Console.WriteLine("  *** Colorbar source running! Check RTL-SDR now. Waiting 8s... ***");
                 Console.Out.Flush();
                 Thread.Sleep(8000);
             }
