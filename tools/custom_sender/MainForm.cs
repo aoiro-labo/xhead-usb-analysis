@@ -63,6 +63,7 @@ namespace XHeadSender
         private TextBox _txtLog;
         private TabPage _sourceTab;
         private TabPage _metaTab;
+        private bool _updatingSourceRadios;
 
         public MainForm()
         {
@@ -160,6 +161,15 @@ namespace XHeadSender
             urlRow.Controls.Add(_rbSourceUrl);
             urlRow.Controls.Add(_txtUrlPath);
             urlRow.Controls.Add(_btnBrowseUrl);
+
+            // WinFormsのRadioButtonは「直接の親コンテナが同じ」場合のみ自動的に排他選択される。
+            // _rbSourceUrlだけ別のコンテナ(urlRow、テキストボックス+参照ボタンと横並びにするため)に
+            // 入っているため、_rbSourceNone/_rbSourceCaptureとは自動排他の対象外になってしまう
+            // (バグ: 動画ファイルを選んだ後に他を選んでも動画ファイル側がONのまま残る)。
+            // コンテナ構成に関わらず確実に排他にするため、明示的にハンドラで管理する。
+            _rbSourceNone.CheckedChanged += SourceRadioChanged;
+            _rbSourceCapture.CheckedChanged += SourceRadioChanged;
+            _rbSourceUrl.CheckedChanged += SourceRadioChanged;
 
             sourceLayout.Controls.Add(_rbSourceNone, 0, 0);
             sourceLayout.Controls.Add(_rbSourceCapture, 0, 1);
@@ -388,6 +398,24 @@ namespace XHeadSender
         {
             _lblStatus.Text = "状態: " + text;
             _lblStatus.ForeColor = color;
+        }
+
+        private void SourceRadioChanged(object sender, EventArgs e)
+        {
+            if (_updatingSourceRadios) return;
+            var changed = (RadioButton)sender;
+            if (!changed.Checked) return;
+            _updatingSourceRadios = true;
+            try
+            {
+                if (changed != _rbSourceNone) _rbSourceNone.Checked = false;
+                if (changed != _rbSourceCapture) _rbSourceCapture.Checked = false;
+                if (changed != _rbSourceUrl) _rbSourceUrl.Checked = false;
+            }
+            finally
+            {
+                _updatingSourceRadios = false;
+            }
         }
 
         private void BackendChanged(object sender, EventArgs e)
