@@ -88,13 +88,16 @@ dotnet run                              # CLI: 疎通確認・プロパティツ
 dotnet bin/Debug/net472/XHeadSender.exe --gui   # GUI: 変調パラメータ+RF電力を自由に設定して送出/停止
 ```
 
-GUI（`MainForm.cs`）は接続→変調パラメータ設定→`ChannelStart`による送出→停止→切断、という
-最小限の操作に絞っている（Source/Capture/エンコーダは構築しない）。周波数・Constellation・
-Bandwidth・FFT・CodeRate・GuardInterval・TimeInterleavce・RF電力(Level/PAGain/DACGain)を
-画面上の入力欄から自由に設定でき、`ChannelStart`単体で変調器を実際にRF駆動できる
-（[tools/direct_usb](tools/direct_usb)の`--configure`と同じ考え方を、こちらは公式サービス
-経由・プロパティ検証つきで行う版）。映像/音声の実ストリーム送出が必要な場合は引き続き
-CLI（引数なしの`dotnet run`）の`RunFullPipelineTest`を使うこと。
+GUI（`MainForm.cs`）は接続→変調パラメータ設定→`ChannelStart`による送出→停止→切断、を
+基本としている。周波数・Constellation・Bandwidth・FFT・CodeRate・GuardInterval・
+TimeInterleavce・RF電力(Level/PAGain/DACGain)を画面上の入力欄から自由に設定でき、
+`ChannelStart`単体で変調器を実際にRF駆動できる（[tools/direct_usb](tools/direct_usb)の
+`--configure`と同じ考え方を、こちらは公式サービス経由・プロパティ検証つきで行う版）。
+「デスクトップキャプチャを送出する」にチェックを入れると、実際の画面をキャプチャして
+送出内容として乗せる（CLI版`RunFullPipelineTest`と同じ経路、動作実証済み）——STUDIO本体の
+基本動作に相当する機能をGUIでも実現している。動画ファイル指定(`SourceUrl`)・カラーバー
+自己完結生成(`SourceTranscode`、[続報8](docs/protocol/modulation_capabilities.md)参照、
+クライアント側に既知の未解決バグあり)はまだGUI未統合。
 
 ## 免責・注意事項
 

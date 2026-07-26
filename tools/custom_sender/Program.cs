@@ -1060,7 +1060,7 @@ namespace XHeadSender
 
         /// <summary>Same idea as PeekSourceViaSecondaryConnection, but for Captures, which are
         /// shared/global (visible to every connection) rather than session-private like Sources.</summary>
-        private static msCapture PeekCaptureViaSecondaryConnection(uint captureHandle)
+        internal static msCapture PeekCaptureViaSecondaryConnection(uint captureHandle)
         {
             var peekChannel = new Channel(ServiceAddress, ChannelCredentials.Insecure);
             var peekClient = new msBroadcastService.msBroadcastServiceClient(peekChannel);

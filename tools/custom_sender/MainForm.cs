@@ -31,6 +31,7 @@ namespace XHeadSender
         private Button _btnStart;
         private Button _btnStop;
         private Button _btnDisconnect;
+        private CheckBox _chkAttachCapture;
         private Label _lblStatus;
         private NumericUpDown _numFrequency;
         private ComboBox _cmbConstellation;
@@ -99,6 +100,18 @@ namespace XHeadSender
             btnPanel.Controls.Add(_btnStart);
             btnPanel.Controls.Add(_btnStop);
             btnPanel.Controls.Add(_btnDisconnect);
+
+            var capPanel = new Panel { Dock = DockStyle.Top, Height = 26, Padding = new Padding(8, 2, 8, 0) };
+            _chkAttachCapture = new CheckBox
+            {
+                Text = "デスクトップキャプチャを送出する（実映像を乗せる）",
+                AutoSize = true,
+                Dock = DockStyle.Left,
+            };
+            _toolTip.SetToolTip(_chkAttachCapture,
+                "オフの場合は変調器のRF出力のみ(ChannelStartだけ)。オンにすると実際にデスクトップ画面を" +
+                "キャプチャして送出内容として乗せる(tools/custom_sender の RunFullPipelineTest と同じ経路、動作実証済み)。");
+            capPanel.Controls.Add(_chkAttachCapture);
 
             var logLabel = new Label { Dock = DockStyle.Top, Height = 22, Text = "ログ:", Padding = new Padding(8, 6, 0, 0) };
 
@@ -179,13 +192,15 @@ namespace XHeadSender
                 Font = new Font(FontFamily.GenericMonospace, 8.5f),
             };
 
-            // 実際の画面上での見た目(上から): 警告 -> 状態 -> ボタン -> 変調パラメータ -> RF電力設定
-            // -> "ログ:" -> ログ欄。注意: 同じDockStyle.Top同士では、後からControls.Addした方が
-            // 画面上は上に来る(直感と逆)。そのためこの一括Addは視覚順とは逆順で書く。
+            // 実際の画面上での見た目(上から): 警告 -> 状態 -> ボタン -> キャプチャ添付チェック
+            // -> 変調パラメータ -> RF電力設定 -> "ログ:" -> ログ欄。注意: 同じDockStyle.Top
+            // 同士では、後からControls.Addした方が画面上は上に来る(直感と逆)。そのためこの
+            // 一括Addは視覚順とは逆順で書く。
             Controls.Add(_txtLog);
             Controls.Add(logLabel);
             Controls.Add(powerGroup);
             Controls.Add(modGroup);
+            Controls.Add(capPanel);
             Controls.Add(btnPanel);
             Controls.Add(_lblStatus);
             Controls.Add(warnLabel);
@@ -281,18 +296,38 @@ namespace XHeadSender
         private async void BtnStart_Click(object sender, EventArgs e)
         {
             _btnStart.Enabled = false;
+            _chkAttachCapture.Enabled = false;
             var cfg = ReadConfigFromForm();
+            bool attachCapture = _chkAttachCapture.Checked;
             try
             {
-                await Task.Run(() => _session.StartChannel(cfg));
-                SetStatus("送出中", Color.SeaGreen);
+                await Task.Run(() =>
+                {
+                    _session.StartChannel(cfg);
+                    if (attachCapture)
+                    {
+                        _session.StartCaptureSource();
+                    }
+                });
+                SetStatus(attachCapture ? "送出中（デスクトップキャプチャ添付）" : "送出中（RFのみ）", Color.SeaGreen);
                 _btnStop.Enabled = true;
             }
             catch (Exception ex)
             {
                 Console.WriteLine("送出開始失敗: " + ex.Message);
-                SetStatus("接続済み（送出失敗）", Color.Firebrick);
-                _btnStart.Enabled = true;
+                // ChannelStartだけ成功してCaptureSource側で失敗した場合、RFは出続けているので
+                // 「送出失敗」ではなく実情に合わせた表示にする。
+                if (_session.ChannelStarted)
+                {
+                    SetStatus("送出中（キャプチャ添付失敗、RFのみ）", Color.DarkOrange);
+                    _btnStop.Enabled = true;
+                }
+                else
+                {
+                    SetStatus("接続済み（送出失敗）", Color.Firebrick);
+                    _btnStart.Enabled = true;
+                    _chkAttachCapture.Enabled = true;
+                }
             }
         }
 
@@ -311,6 +346,7 @@ namespace XHeadSender
             {
                 SetStatus("接続済み（送出停止中）", Color.SteelBlue);
                 _btnStart.Enabled = true;
+                _chkAttachCapture.Enabled = true;
             }
         }
 
@@ -331,6 +367,7 @@ namespace XHeadSender
             {
                 SetStatus("未接続", Color.DimGray);
                 _btnConnect.Enabled = true;
+                _chkAttachCapture.Enabled = true;
             }
         }
 

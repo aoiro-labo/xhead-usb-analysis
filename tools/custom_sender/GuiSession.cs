@@ -1,27 +1,35 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using Grpc.Core;
 using mnFramework.grpc;
 
 namespace XHeadSender
 {
     /// <summary>
-    /// GUI向けの接続・チャンネル制御。CLIの RunFullPipelineTest とは異なり、Source/Capture/
-    /// エンコーダは一切構築せず、ChannelOpen -> ProgramAdd/Commit -> ChannelStart のみ行う
-    /// (docs/protocol/modulation_capabilities.md の「続報3」で判明した通り、ChannelStart単体で
-    /// 変調器を実際にRF駆動できる -- tools/direct_usb --configure が mnservice.exe 非依存で
-    /// 同じことを実証済み)。ボタンごとに呼ばれる想定で、状態は接続中/チャンネル開始中のみ保持する。
+    /// GUI向けの接続・チャンネル制御。当初はChannelOpen->ProgramAdd/Commit->ChannelStartのみ
+    /// だった(docs/protocol/modulation_capabilities.md の「続報3」で判明した通り、ChannelStart
+    /// 単体で変調器を実際にRF駆動できる -- tools/direct_usb --configure が mnservice.exe 非依存で
+    /// 同じことを実証済み)。2026-07-26、「STUDIOでできることは自分のツールでもできるように」
+    /// という方針のもと、実ソース(デスクトップキャプチャ)の添付にも対応した -- 手順は
+    /// tools/custom_sender の RunFullPipelineTest と同一(CaptureOpen/Start -> SourceOpen(Capture)
+    /// -> ProgramApply -> SourceStart)。
     /// </summary>
     internal sealed class GuiSession
     {
         private Channel _channel;
         private msBroadcastService.msBroadcastServiceClient _client;
         private msClient _msClient;
+        private EventWatcher _watcher;
         private uint _outputHandle;
         private uint _chHandle;
+        private uint _capHandle;
+        private uint _srcHandle;
 
         public bool Connected => _client != null;
         public bool ChannelStarted { get; private set; }
+        public bool SourceStarted { get; private set; }
 
         public void Connect()
         {
@@ -60,6 +68,9 @@ namespace XHeadSender
                     (response.HasErrMessage ? " " + response.ErrMessage : ""));
             }
             _msClient = response.Client;
+
+            _watcher = new EventWatcher();
+            _watcher.Start(_client, _msClient.HandleID);
 
             _outputHandle = 0;
             foreach (var output in _msClient.Outputs)
@@ -164,9 +175,172 @@ namespace XHeadSender
             }
         }
 
+        /// <summary>
+        /// STUDIOの基本動作（画面を選んで送出開始）に相当する、実ソース(デスクトップキャプチャ)の
+        /// 添付。ChannelStart済みであることが前提。tools/custom_sender の RunFullPipelineTest と
+        /// 同一のRPC列（CaptureOpen -> 待機 -> CaptureStart -> 別接続でContent確認(Captureは
+        /// 全クライアント共有なのでこれが可能 -- Sourceはクライアント毎プライベートなので同じ
+        /// 手は使えない) -> SourceOpen(Capture) -> EventSourceStatus待機 -> ProgramApply ->
+        /// SourceStart）を踏襲する。
+        /// </summary>
+        public void StartCaptureSource()
+        {
+            if (!ChannelStarted) throw new InvalidOperationException("先に送出を開始してください。");
+            if (SourceStarted) throw new InvalidOperationException("既にソースが接続されています。");
+
+            msCapture desktopCap = null;
+            foreach (var cap in _msClient.Captures)
+            {
+                if (cap.CaptureType == msCaptureType.Dxgidesktop) { desktopCap = cap; break; }
+            }
+            if (desktopCap == null)
+            {
+                throw new InvalidOperationException("デスクトップキャプチャ(Dxgidesktop)が見つかりません。");
+            }
+            Console.WriteLine($"[GUI] Using capture: {desktopCap.Name} HandleID={desktopCap.HandleID}");
+
+            uint clientId = _msClient.HandleID;
+            _client.sendRequest(new msRequest { Cmd = msServiceCmd.CmdCaptureOpen, ClientID = clientId, HandleID = desktopCap.HandleID }, deadline: DateTime.UtcNow.AddSeconds(8));
+            Thread.Sleep(3000);
+            var capStartResp = _client.sendRequest(new msRequest { Cmd = msServiceCmd.CmdCaptureStart, ClientID = clientId, HandleID = desktopCap.HandleID }, deadline: DateTime.UtcNow.AddSeconds(8));
+            Console.WriteLine($"[GUI] CaptureStart Result={capStartResp.Result}");
+            Thread.Sleep(2000);
+            _capHandle = desktopCap.HandleID;
+
+            try
+            {
+                var peekedCap = Program.PeekCaptureViaSecondaryConnection(desktopCap.HandleID);
+                if (peekedCap == null || (peekedCap.Content?.Programs.Count ?? 0) == 0)
+                {
+                    throw new InvalidOperationException("キャプチャのContentが取得できませんでした。");
+                }
+                var capProgram = peekedCap.Content.Programs[0];
+                Console.WriteLine($"[GUI] Capture ready: Program ID={capProgram.ID} Streams={capProgram.Streams.Count}");
+
+                var capParamForSource = new msCaptureParam();
+                foreach (var s in capProgram.Streams)
+                {
+                    capParamForSource.Content.Add(new msCaptureParam.Types.Capture { HandleID = desktopCap.HandleID, ProgramID = capProgram.ID, StreamIndex = s.Index });
+                }
+                var sourceOpenReq = new msRequest
+                {
+                    Cmd = msServiceCmd.CmdSourceOpen,
+                    ClientID = clientId,
+                    Source = new msSourceParam { Mode = msSourceMode.SourceCapture, Name = "XHeadSenderGUICapture", Capture = capParamForSource }
+                };
+                var sourceResp = _client.sendRequest(sourceOpenReq, deadline: DateTime.UtcNow.AddSeconds(10));
+                Console.WriteLine($"[GUI] SourceOpen(Capture) Result={sourceResp.Result} ParamCase={sourceResp.ParamCase}" +
+                    (sourceResp.HasErrMessage ? $" ErrMessage={sourceResp.ErrMessage}" : ""));
+                if (sourceResp.ParamCase != msResponse.ParamOneofCase.Source)
+                {
+                    throw new InvalidOperationException("SourceOpen failed: " + sourceResp.Result +
+                        (sourceResp.HasErrMessage ? " " + sourceResp.ErrMessage : ""));
+                }
+                var src = sourceResp.Source;
+                _srcHandle = src.HandleID;
+
+                Console.WriteLine("[GUI] Waiting for EventSourceStatus to reach StatusReady (up to 10s)...");
+                var finalStatus = _watcher.WaitForStatusReady(src.HandleID, TimeSpan.FromSeconds(10));
+                if ((finalStatus?.Content?.Programs.Count ?? 0) == 0)
+                {
+                    throw new InvalidOperationException("ソースのContentが取得できませんでした。");
+                }
+                var srcProgram = finalStatus.Content.Programs[0];
+                Console.WriteLine($"[GUI] Source's Program ID={srcProgram.ID} Streams={srcProgram.Streams.Count}");
+
+                var chosenEngine = _msClient.Engines.FirstOrDefault(e =>
+                    (e.Name?.IndexOf("nvidia", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    (e.Name?.IndexOf("cuvid", StringComparison.OrdinalIgnoreCase) >= 0))
+                    ?? (_msClient.Engines.Count > 0 ? _msClient.Engines[0] : null);
+                Console.WriteLine($"[GUI] Chosen engine: HandleID={chosenEngine?.HandleID} Name={chosenEngine?.Name}");
+
+                var content = new msMediaContent
+                {
+                    Index = 0,
+                    Param = new msMediaParam { Functions = msMediaFunction.MediaNone },
+                    SourceID = src.HandleID,
+                    ProgramID = srcProgram.ID,
+                    EngineID = chosenEngine?.HandleID ?? 0
+                };
+                foreach (var s in srcProgram.Streams)
+                {
+                    var contentStream = new msMediaContent.Types.Stream { Index = s.Index };
+                    contentStream.Nodes.Add(new msMediaContent.Types.Node { Mode = msMediaContent.Types.NodeMode.NodePassthrough });
+                    content.Streams.Add(contentStream);
+                }
+
+                var applyReq = new msRequest { Cmd = msServiceCmd.CmdProgramApply, ClientID = clientId, HandleID = _chHandle, Content = content };
+                var applyResp = _client.sendRequest(applyReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine($"[GUI] ProgramApply Result={applyResp.Result}" +
+                    (applyResp.HasErrMessage ? $" ErrMessage={applyResp.ErrMessage}" : ""));
+                if (applyResp.Result != msResult.ResultSuccess)
+                {
+                    throw new InvalidOperationException("ProgramApply failed: " + applyResp.Result +
+                        (applyResp.HasErrMessage ? " " + applyResp.ErrMessage : ""));
+                }
+
+                var sourceStartReq = new msRequest { Cmd = msServiceCmd.CmdSourceStart, ClientID = clientId, HandleID = src.HandleID };
+                var sourceStartResp = _client.sendRequest(sourceStartReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine($"[GUI] SourceStart Result={sourceStartResp.Result} Status={sourceStartResp.Status}");
+                if (sourceStartResp.Result != msResult.ResultSuccess)
+                {
+                    throw new InvalidOperationException("SourceStart failed: " + sourceStartResp.Result);
+                }
+
+                SourceStarted = true;
+                Console.WriteLine("[GUI] *** デスクトップキャプチャの送出を開始しました。 ***");
+            }
+            catch
+            {
+                StopCaptureSourceInternal();
+                throw;
+            }
+        }
+
+        public void StopCaptureSource()
+        {
+            StopCaptureSourceInternal();
+        }
+
+        private void StopCaptureSourceInternal()
+        {
+            uint clientId = _msClient?.HandleID ?? 0;
+            if (_srcHandle != 0 && _client != null)
+            {
+                try
+                {
+                    _client.sendRequest(new msRequest { Cmd = msServiceCmd.CmdSourceStop, ClientID = clientId, HandleID = _srcHandle }, deadline: DateTime.UtcNow.AddSeconds(5));
+                    var closeResp = _client.sendRequest(new msRequest { Cmd = msServiceCmd.CmdSourceClose, ClientID = clientId, HandleID = _srcHandle }, deadline: DateTime.UtcNow.AddSeconds(5));
+                    Console.WriteLine($"[GUI] SourceClose Result={closeResp.Result}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[GUI] SourceClose error: {ex.Message}");
+                }
+            }
+            if (_capHandle != 0 && _client != null)
+            {
+                try
+                {
+                    _client.sendRequest(new msRequest { Cmd = msServiceCmd.CmdCaptureStop, ClientID = clientId, HandleID = _capHandle }, deadline: DateTime.UtcNow.AddSeconds(5));
+                    var closeResp = _client.sendRequest(new msRequest { Cmd = msServiceCmd.CmdCaptureClose, ClientID = clientId, HandleID = _capHandle }, deadline: DateTime.UtcNow.AddSeconds(5));
+                    Console.WriteLine($"[GUI] CaptureClose Result={closeResp.Result}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[GUI] CaptureClose error: {ex.Message}");
+                }
+            }
+            _srcHandle = 0;
+            _capHandle = 0;
+            SourceStarted = false;
+        }
+
         public void StopChannel()
         {
             if (!ChannelStarted) return;
+
+            if (SourceStarted) StopCaptureSourceInternal();
 
             var stopReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = _msClient.HandleID, HandleID = _chHandle };
             var stopResp = _client.sendRequest(stopReq, deadline: DateTime.UtcNow.AddSeconds(5));
