@@ -535,6 +535,69 @@ handling`という例外を投げてしまい、応答からSourceのHandleIDを
 
 再現コードは`tools/custom_sender/Program.cs`の`RunColorbarTest`（`--colorbar`引数で起動）。
 
+### 続報9 (2026-07-26): 出力時のBML付与——ファイルパス方式と判明、XHEAD-STUDIO本体でも実証
+
+`mPSEncodeParam.BMLFile`（`custom_sender`のプロパティダンプで確認: **FieldID=38, Type=FieldString**,
+既定値は空文字列）を実際に検証した。文字列型ということは、データそのものではなく
+**ローカルファイルパスを渡す設計**だと推測し、公式アプリ本体（`xhead_studio.exe`、
+`EnableDebugMode`/`EnableBML`は既に有効化済みの状態）を実際に起動して確認した。
+
+**事実（`xhead_studio.exe`のログ観察）**: アプリ起動直後、常に以下の警告が出る:
+
+```
+mmts_bml.cc:102] bml file [C:\Users\<user>\AppData\Roaming\Micomsoft\XHeadUSB\XHeadUSB_<user>.xbml] not exist.
+```
+
+これは`xHeadConfig.cs`の`BMLFile`静的プロパティが返すパスと完全一致する
+（`decompiled/xhead_studio/xhead_usb/xHeadConfig.cs`: `Path.Combine(ConfigPath,
+getFileName(Environment.UserName, "xbml"))`）。つまり**BMLは`EnableBML`フラグ（GUIのBMLタブ
+表示可否）とは独立に、`ChannelStart`のたびに常にこの固定パスを探しにいく**——ファイルが
+無くても警告が出るだけで送出自体は正常に続行される（BMLはオプショナル）。
+
+**実験: 手作りの`.xbml`ファイルを置いてみる（事実）**: `decompiled/xhead_studio/xhead_usb.config/
+xBMLFile.cs`で解読済みのバイナリ形式（ヘッダタグ`4201644322`→サイズ→ストリーム数→
+各ストリーム(タグ`4221112873`+PID+ComponentTag+BitRate+ESInfoLength+RawLen+ESInfo64バイト+
+生TSデータ)→エンドタグ`4235331587`）に従って、PID`0x140`・ComponentTag`0x40`・188バイトの
+ダミーTSパケット1本だけを含む最小限の`.xbml`ファイルを自作し、上記の固定パスに配置した。
+
+`xhead_studio.exe`を再起動したところ、**「not exist」警告が消え**、エンコーダ初期化・
+`adjust power`・`channel start output`という通常時と同じ成功シーケンスがログに記録された。
+RTL-SDRでも通常運用時と同じRF出力（470〜476MHz帯に+34〜36dB）を確認した。実機・
+`mnservice.exe`とも終始健全だった。
+
+**Ghidraでの裏付けと限界（事実として明記）**: `mmts_bml.cc`内の該当関数
+（`FUN_1400a56f0`、`mnservice.exe`の`mmts_bml.cc:0x66`相当）をデコンパイルしたところ、
+中身は非常に単純だった:
+
+```c
+undefined1 FUN_1400a56f0(char *path) {
+    if (strlen(path) != 0) {
+        FILE *f = fopen(path, "rb");
+        if (f == NULL) { /* "bml file [%s] not exist." を警告ログ */ return 0; }
+        fclose(f);
+        return 1;   // ファイルが開けるかどうかだけを見ている
+    }
+    return 0;
+}
+```
+
+**この関数は「ファイルが存在し`fopen`できるか」だけを検証しており、中身のバイナリ構造
+（ヘッダタグ・ストリームエントリ等）を解釈するコードではない**。つまり今回確定的に言えるのは
+「ファイルパスの解決とオープンには成功した」ことまでで、**自作した`.xbml`の中身が実際に
+正しいBMLコンテナとしてパースされ、データ放送コンポーネントとしてTSに多重化されたかどうかは
+未確認**（実際のパーサー関数は今回のGhidra探索では特定できなかった）。ビットレベルでの
+確認にはTSDuck等での実TS解析が必要——[tools/rtlsdr_analysis](../../tools/rtlsdr_analysis)の
+既知の限界と同じ。
+
+**まとめ（事実と未解決を明記）**:
+- 事実: `mPSEncodeParam.BMLFile`は固定のローカルファイルパス方式。`EnableBML`フラグとは
+  無関係に、ファイルが存在しさえすれば`ChannelStart`のたびに読み込まれる。
+- 事実: 自作の最小限`.xbml`ファイルで「存在確認」ゲートは通過し、送出パイプライン全体も
+  正常動作・RF出力も確認できた。
+- 未解決: ファイルの中身（バイナリ構造・PID/ComponentTag/ESInfo/生TSデータ）が実際に
+  正しく解釈されているかは、対応するパーサー関数の解析もビットレベルでのTS確認も
+  できておらず未確認。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

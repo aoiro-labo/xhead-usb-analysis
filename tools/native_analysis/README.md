@@ -69,6 +69,11 @@ analyzeHeadless.bat <projectDir> <projectName> -process mnservice.exe -noanalysi
   呼び出し元アドレス群を直接デコンパイル。`mazo::mbroadcast::mCalibration`というRF較正
   データ読み出しクラスを発見できた（[tools/usb_capture/README.md](../usb_capture/README.md)
   「続報10」）。
+- `XHeadFindBmlHandler.java` — バイナリ中の文字列（`"bml file"`・`"not exist."`）を`Memory.
+  findBytes`で直接検索し、その参照元関数を洗い出してデコンパイルする版。シンボル名に頼らず
+  ログ文字列から出発する手法で、`mmts_bml.cc`のファイル存在確認関数(`FUN_1400a56f0`)を
+  特定できた（[docs/protocol/modulation_capabilities.md](../../docs/protocol/modulation_capabilities.md)
+  「続報9」）。
 
 ## cdbでの動的解析（ライブブレークポイント）
 
