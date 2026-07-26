@@ -1253,7 +1253,8 @@ GUIには設けていない）を追加し、選択に応じて:
 **ライブ検証（事実）**: GUIのバックエンドクラス(`DirectUsbSession`)を実際に呼び出すCLIの
 テスト経路（`tools/custom_sender --directtest --mode <値>`、新規追加）で、`mnservice.exe`を
 停止した状態からMode=ATSC(2)・Mode=J83B(3)を実行し、RTL-SDRでそれぞれ実際のRF出力
-（J83Bで+37.2dB）を確認した。GUI自体の見た目・操作連動も、`PrintWindow`によるウィンドウ
+（J83Bで+37.2dB、`tools/rtlsdr_analysis/rtlsdr_gui_j83b_scan1.csv`）を確認した。GUI自体の
+見た目・操作連動も、`PrintWindow`によるウィンドウ
 キャプチャと`SendMessage`によるネイティブメッセージ送信（`BM_CLICK`でラジオボタン選択、
 `CB_SETCURSEL`でコンボボックス変更——実際のマウス操作やフォーカス変更は一切伴わない）で
 確認した: 「直接USB」選択→Mode=ATSC選択で、「変調方式」が「8VSB」のみに絞られ、
