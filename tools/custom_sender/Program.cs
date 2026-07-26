@@ -123,6 +123,20 @@ namespace XHeadSender
                 return RunDirectUsbTest();
             }
 
+            if (args.Contains("--verbose-grpc"))
+            {
+                // 2026-07-26: diagnostic aid used to root-cause the "Unknown: Unexpected error in
+                // RPC handling" exception seen on SourceOpen(Transcode/Colorbar)'s response. This
+                // revealed the InnerException "Error received from peer" -- proof the error is a
+                // genuine server-side (mnservice.exe) gRPC UNKNOWN status, not a client-side
+                // deserialization bug (see docs/protocol/modulation_capabilities.md 続報8 addendum).
+                // GRPC_VERBOSITY/GRPC_TRACE must be set before the native library initializes
+                // (i.e. before any Channel is constructed) to have any effect.
+                Environment.SetEnvironmentVariable("GRPC_VERBOSITY", "DEBUG");
+                Environment.SetEnvironmentVariable("GRPC_TRACE", "all");
+                GrpcEnvironment.SetLogger(new Grpc.Core.Logging.ConsoleLogger());
+            }
+
             EnsureNativeDllPathConfigured();
 
             Console.WriteLine($"[XHeadSender] connecting to {ServiceAddress} ...");
@@ -1179,24 +1193,29 @@ namespace XHeadSender
             }
             catch (RpcException ex)
             {
-                // KNOWN ISSUE (2026-07-26): with the corrected H264/MP1_L2 format below, this call
-                // reliably throws "Unknown: Unexpected error in RPC handling" on the CLIENT side --
-                // but mnservice.exe's own log shows the operation actually SUCCEEDED server-side
-                // regardless: encoder init (mff_hardware.cc "codec [h264_nvenc:cuda:...]"),
-                // "channel [...] start output", and mmts_source.cc packet counters incrementing
-                // continuously for over a minute. RTL-SDR confirmed real RF output during that
-                // window (+34-35dB across 470-476MHz, matching the known ISDB-T signature) --
-                // i.e. the colorbar/transcode pipeline genuinely works, only the SourceOpen
-                // *response* fails to reach this client cleanly (root cause not yet found -- some
-                // field in msSource's response likely doesn't (de)serialize cleanly on this client
-                // version). Consequence: we never learn the Source's HandleID, so it can't be
+                // KNOWN ISSUE (2026-07-26, root-caused via --verbose-grpc, see 続報8 addendum): with
+                // the corrected H264/MP1_L2 format below, this call reliably throws "Unknown:
+                // Unexpected error in RPC handling". The InnerException's "Error received from peer"
+                // proves this is a genuine SERVER-SIDE (mnservice.exe) gRPC UNKNOWN status -- not a
+                // client-side deserialization bug. mnservice.exe's own log shows the operation
+                // actually SUCCEEDED internally despite returning this error: encoder init
+                // (mff_hardware.cc "codec [h264_nvenc:cuda:...]"), "channel [...] start output", and
+                // mmts_source.cc packet counters incrementing continuously for over a minute.
+                // RTL-SDR confirmed real RF output during that window (+34-35dB across 470-476MHz,
+                // matching the known ISDB-T signature) -- i.e. the colorbar/transcode pipeline
+                // genuinely works. Consequence: we never learn the Source's HandleID, so it can't be
                 // cleanly stopped/closed from here -- it's left running until mnservice.exe is
-                // restarted. Documented in tools/custom_sender/README-equivalent notes; do not
-                // treat this exception as "the feature doesn't work".
+                // restarted. FURTHER (2026-07-26, 続報18): this exception has also been observed to
+                // leave mnservice.exe's entire gRPC service unresponsive to ALL subsequent requests
+                // (including from other client processes), the same "wait service timeout" signature
+                // as the DTMB/J83C ChannelStart hang -- NOT just this Source being orphaned. Treat
+                // any use of --colorbar as requiring a possible mnservice.exe restart afterward.
                 Console.WriteLine($"  SourceOpen(Transcode) RPC error: {ex.Status}");
-                Console.WriteLine("  NOTE: mnservice.exe's own log has shown this to succeed server-side despite this " +
-                    "client-side error (see comment above) -- the Source may now be running orphaned. " +
-                    "Restart mnservice.exe to clean it up if needed.");
+                Console.WriteLine($"  Full exception: {ex}");
+                Console.WriteLine($"  InnerException: {ex.InnerException}");
+                Console.WriteLine("  NOTE: this is a known SERVER-SIDE mnservice.exe error (see 続報8/18) -- RF output " +
+                    "succeeds regardless, but the gRPC service may become unresponsive afterward. " +
+                    "Restart mnservice.exe if subsequent commands fail with 'wait service timeout'.");
                 CloseChannel(client, clientId, chHandle);
                 return;
             }

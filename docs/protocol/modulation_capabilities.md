@@ -549,6 +549,43 @@ handling`という例外を投げてしまい、応答からSourceのHandleIDを
 
 再現コードは`tools/custom_sender/Program.cs`の`RunColorbarTest`（`--colorbar`引数で起動）。
 
+**【2026-07-26追記・訂正】上記「クライアント側の応答パース問題」という原因推定は誤りだった。**
+`--verbose-grpc`フラグ（`GRPC_VERBOSITY=DEBUG`・`GRPC_TRACE=all`・`GrpcEnvironment.SetLogger`を
+`Channel`構築前に設定、`Program.cs`に追加）でgRPCの詳細ログを有効化して再実行したところ、
+例外の実体は次の通りだった:
+
+```
+Grpc.Core.RpcException: Status(StatusCode="Unknown", Detail="Unexpected error in RPC handling", ...)
+  ---> Grpc.Core.Internal.CoreErrorDetailException: {"description":"Error received from peer
+       ipv6:[::1]:50051", "file":"...\\src\\core\\lib\\surface\\call.cc", "grpc_status":2}
+```
+
+**「Error received from peer」は、クライアントが応答をパースできなかったのではなく、
+サーバー（`mnservice.exe`）自身がgRPCレベルで`UNKNOWN`ステータスを明示的に返してきた
+ことを意味する**——C-coreのこの文言・ファイル位置は、本プロジェクトで何度も見てきた
+「サーバーが送ってきた正規のエラー応答」（`wait service timeout`・`unhandled command`等）と
+全く同じラッパーであり、クライアント側のデシリアライズ失敗ではローカルの例外型・
+スタックトレースになるはずでここには出てこない。`grpc_status=2`(UNKNOWN)・
+メッセージ`"Unexpected error in RPC handling"`という汎用文言は、gRPCのC++サーバー
+フレームワークで一般的な「リクエストハンドラ内で未処理の例外が発生した際の
+汎用catch-allレスポンス」の定型文と一致する。
+
+つまり実際には**`mnservice.exe`が`SourceOpen(Transcode)`の処理中に内部で例外を投げており、
+それをgRPCサーバー側のフレームワークが捕捉してこの汎用エラーとして返している**、という
+ネイティブ側の問題であり、本ツール側の応答パースには問題が無かった。エンコーダ初期化や
+チャンネル出力開始のログがこの後に記録されるのは、内部処理の一部が例外発生前後で
+非同期的に既に走り始めていたためと考えられる（推測）。`SourceTranscode`はSTUDIO自身の
+通常のGUIフロー（ファイル一覧からの再生）では使われていない、リフレクションで発見した
+「第三のSourceMode」であるため、DTMB/J83Cのハング（続報13）と同様に、STUDIO自身が
+日常的に踏まないコードパスに実装の粗さが残っている可能性が高い——これはクライアント側で
+修正できる問題ではなく、`mnservice.exe`自体の挙動として受け入れるしかない。
+
+**今後の方針**: この例外は「機能が壊れている」ことを意味しない（RF出力は実際に到達している）
+ため、GUIに統合する場合は「既知の警告が出るが送出自体は動作する」という注記付きで
+提供するのが現実的。より深い原因（`mnservice.exe`内のどの処理が具体的に例外を投げているか）
+を特定するには、cdbで`SourceOpen`ハンドラ周辺にブレークポイントを張るネイティブ動的解析が
+必要——未着手。
+
 ### 続報9 (2026-07-26): 出力時のBML付与——ファイルパス方式と判明、XHEAD-STUDIO本体でも実証
 
 `mPSEncodeParam.BMLFile`（`custom_sender`のプロパティダンプで確認: **FieldID=38, Type=FieldString**,
@@ -1087,6 +1124,43 @@ Constellationだけ`4`=DVB_TのQAM64生値）を実行したところ、全29回
 当てはまるかは未確認——特にDTMB/J83Cは続報13でmnservice.exe経由でもハングする本物のバグが
 確認されているため、レジスタレベルで試すこと自体にも追加のリスクがあり得る（未実施、
 慎重な検討が必要）。
+
+### 続報18 (2026-07-26): 【訂正】続報8「実害なし」は誤り——`SourceTranscode`の例外は`mnservice.exe`のgRPCサービス全体をハングさせる
+
+続報8では「クライアントからそのSourceを正常に停止できず孤立したまま動き続けた（**実害はなし**、
+実機・サービスとも健全性を維持）」と記録したが、GUI統合（続報16の`StartColorbarSource()`）の
+最終ライブ再検証で、この評価は不正確だったと判明した。
+
+**再現手順と観測（事実）**: `mnservice.exe`を新規起動し直した直後の状態で
+`RunColorbarTest`（`--colorbar`）を実行、想定通り`SourceOpen(Transcode)`が
+`Unknown: Unexpected error in RPC handling`で失敗した。その**直後**、後始末として呼んでいる
+`CloseChannel()`内の`CmdChannelClose`が
+
+```
+Status(StatusCode="Cancelled", Detail="wait service timeout", ...)
+```
+
+で失敗した。これはDTMB/J83C（続報13）のサービスハングと全く同じシグネチャである。念のため
+別プロセスから`dotnet run`（引数なし、`CmdConnect`から始まる`RunFullPipelineTest`）を実行した
+ところ、これも即座に同じ`wait service timeout`で失敗——**`mnservice.exe`プロセス自体は
+生存・`Responding=True`のままだが、gRPCサービス層は新規リクエストを一切受け付けない状態に
+陥っていた**ことを確認した。
+
+**復旧と実機健全性の確認（事実）**: `Get-PnpDevice`でXHEAD-USBの`Status=OK`を確認（実機は
+健全）した上で、ハングした`mnservice.exe`を`Stop-Process -Force`で終了し、新規に起動し直した。
+再起動後、`RunFullPipelineTest`（Capture→ChannelStart→SourceOpen→...→ChannelClose の
+フルパイプライン）を最後まで完走させ、`ChannelStop`/`SourceClose`/`ChannelClose`すべてが
+`ResultSuccess`で正常終了することを確認した——サービス・実機とも復旧している。
+
+**結論（訂正）**: `SourceTranscode`の`SourceOpen`例外は、RF出力自体は成功する（続報8で確認済み）
+一方で、**`mnservice.exe`のgRPCサービス全体を無応答にする副作用を伴うことがある**——DTMB/J83C
+（続報13）と同種の「STUDIO自身が踏まないコードパスの実装の粗さ」カテゴリのバグであり、
+「機能は動くが実害なし」という続報8の当初評価は誤りだった。**実害あり**: この操作を行うと
+`mnservice.exe`の再起動が必要になる可能性が高い。
+
+**GUIへの反映**: `tools/custom_sender`のカラーバー機能（`_rbSourceColorbar`）は、選択前に
+「既知の警告が出る」だけでなく「送出後は`mnservice.exe`の再起動が必要になる場合がある」旨を
+明示する警告に更新する（後続の作業で対応）。
 
 ## 重要な注意事項
 

@@ -38,6 +38,7 @@ namespace XHeadSender
         private Button _btnDisconnect;
         private RadioButton _rbSourceNone;
         private RadioButton _rbSourceCapture;
+        private RadioButton _rbSourceColorbar;
         private RadioButton _rbSourceUrl;
         private TextBox _txtUrlPath;
         private Button _btnBrowseUrl;
@@ -167,6 +168,7 @@ namespace XHeadSender
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             _rbSourceNone = new RadioButton { Text = "RFのみ（既定、送出内容なし）", AutoSize = true, Checked = true, Margin = new Padding(0, 4, 0, 2) };
             _toolTip.SetToolTip(_rbSourceNone, "変調器のRF出力のみ(ChannelStartだけ)。実際の映像/音声は乗せない。");
@@ -175,6 +177,14 @@ namespace XHeadSender
             _toolTip.SetToolTip(_rbSourceCapture,
                 "実際にデスクトップ画面をキャプチャして送出内容として乗せる" +
                 "(tools/custom_sender の RunFullPipelineTest と同じ経路、動作実証済み)。");
+
+            _rbSourceColorbar = new RadioButton { Text = "カラーバー（自己完結テストパターン、STUDIOにない機能、注意）", AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
+            _toolTip.SetToolTip(_rbSourceColorbar,
+                "外部ファイル・キャプチャデバイス不要の自己完結テスト信号(SourceTranscode)。RF出力は実証済みだが、" +
+                "mnservice.exe自身が既知のgRPCエラーを返す(続報8) -- 「ソース添付失敗、RFのみ」表示になっても" +
+                "実際にはRFが出ている可能性が高い。注意: この例外はmnservice.exeのgRPCサービス全体を" +
+                "無応答にすることがある(続報18)。使用後にサービスが応答しなくなった場合は" +
+                "mnservice.exeを再起動すること。");
 
             var urlRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0, 2, 0, 4) };
             _rbSourceUrl = new RadioButton { Text = "動画ファイル:", AutoSize = true, Anchor = AnchorStyles.Left };
@@ -195,11 +205,13 @@ namespace XHeadSender
             // コンテナ構成に関わらず確実に排他にするため、明示的にハンドラで管理する。
             _rbSourceNone.CheckedChanged += SourceRadioChanged;
             _rbSourceCapture.CheckedChanged += SourceRadioChanged;
+            _rbSourceColorbar.CheckedChanged += SourceRadioChanged;
             _rbSourceUrl.CheckedChanged += SourceRadioChanged;
 
             sourceLayout.Controls.Add(_rbSourceNone, 0, 0);
             sourceLayout.Controls.Add(_rbSourceCapture, 0, 1);
-            sourceLayout.Controls.Add(urlRow, 0, 2);
+            sourceLayout.Controls.Add(_rbSourceColorbar, 0, 2);
+            sourceLayout.Controls.Add(urlRow, 0, 3);
 
             var metaLayout = NewParamTable();
             metaLayout.Padding = new Padding(10, 10, 6, 10);
@@ -564,6 +576,7 @@ namespace XHeadSender
             {
                 if (changed != _rbSourceNone) _rbSourceNone.Checked = false;
                 if (changed != _rbSourceCapture) _rbSourceCapture.Checked = false;
+                if (changed != _rbSourceColorbar) _rbSourceColorbar.Checked = false;
                 if (changed != _rbSourceUrl) _rbSourceUrl.Checked = false;
             }
             finally
@@ -620,6 +633,7 @@ namespace XHeadSender
         {
             _rbSourceNone.Enabled = enabled;
             _rbSourceCapture.Enabled = enabled;
+            _rbSourceColorbar.Enabled = enabled;
             _rbSourceUrl.Enabled = enabled;
             _txtUrlPath.Enabled = enabled;
             _btnBrowseUrl.Enabled = enabled;
@@ -673,6 +687,7 @@ namespace XHeadSender
             }
 
             bool attachCapture = _rbSourceCapture.Checked;
+            bool attachColorbar = _rbSourceColorbar.Checked;
             bool attachUrl = _rbSourceUrl.Checked;
             string urlPath = _txtUrlPath.Text;
             try
@@ -684,12 +699,18 @@ namespace XHeadSender
                     {
                         _session.StartCaptureSource();
                     }
+                    else if (attachColorbar)
+                    {
+                        _session.StartColorbarSource();
+                    }
                     else if (attachUrl)
                     {
                         _session.StartUrlSource(urlPath);
                     }
                 });
-                string label = attachCapture ? "送出中（デスクトップキャプチャ添付）" : attachUrl ? "送出中（動画ファイル添付）" : "送出中（RFのみ）";
+                string label = attachCapture ? "送出中（デスクトップキャプチャ添付）" :
+                    attachColorbar ? "送出中（カラーバー添付）" :
+                    attachUrl ? "送出中（動画ファイル添付）" : "送出中（RFのみ）";
                 SetStatus(label, Color.SeaGreen);
                 _btnStop.Enabled = true;
             }

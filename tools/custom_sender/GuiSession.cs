@@ -357,6 +357,104 @@ namespace XHeadSender
         }
 
         /// <summary>
+        /// 2026-07-26: 自己完結カラーバー/サイントーン(SourceTranscode)。外部ファイル・
+        /// キャプチャデバイス不要でRF出力を確認できる、STUDIO自体には無い機能
+        /// (docs/protocol/modulation_capabilities.md「続報8」)。
+        ///
+        /// 既知の問題: `SourceOpen`が`RpcException(Unknown, "Unexpected error in RPC handling")`
+        /// を確実に投げる。`--verbose-grpc`でgRPCの詳細ログを取ったところ、これは
+        /// クライアント側の応答パース失敗ではなく**`mnservice.exe`自身がgRPCレベルで
+        /// UNKNOWNステータスを明示的に返している**ことが判明した(続報8追記)——`SourceTranscode`
+        /// はSTUDIO自身の通常のGUIフローでは使われない経路のため、ネイティブ側に実装の粗さが
+        /// 残っていると見られる。ただし実機のRFは確かに出力される(RTL-SDRで+34〜35dB実測済み)。
+        /// クライアント側で直せる問題ではないため、例外は「ソース添付失敗」として上位に伝播させ、
+        /// 呼び出し元(MainForm)の既存フォールバック("送出中（ソース添付失敗、RFのみ）")に任せる
+        /// ——ChannelStartは既に成功しているのでRFは出続けている。
+        ///
+        /// 追加の既知の問題(続報18): この例外の後、`mnservice.exe`のgRPCサービス全体が
+        /// 新規リクエストを受け付けなくなる(DTMB/J83Cのハングと同じ"wait service timeout"症状)
+        /// ことがあると確認済み。単にこのSourceが孤立するだけでなく、サービス全体の再起動が
+        /// 必要になる場合がある。
+        /// </summary>
+        public void StartColorbarSource()
+        {
+            if (!ChannelStarted) throw new InvalidOperationException("先に送出を開始してください。");
+            if (SourceStarted) throw new InvalidOperationException("既にソースが接続されています。");
+
+            uint clientId = _msClient.HandleID;
+            var chosenEngine = _msClient.Engines.FirstOrDefault(e =>
+                (e.Name?.IndexOf("nvidia", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (e.Name?.IndexOf("cuvid", StringComparison.OrdinalIgnoreCase) >= 0))
+                ?? (_msClient.Engines.Count > 0 ? _msClient.Engines[0] : null);
+            Console.WriteLine($"[GUI] Chosen engine: HandleID={chosenEngine?.HandleID} Name={chosenEngine?.Name}");
+
+            var transcode = new msTranscodeParam
+            {
+                Engine = chosenEngine?.HandleID ?? 0,
+                QueueTime = 1000,
+                Colorbar = msColorbarMode.ColorbarSmptehdbars,
+                Video = new msVideo
+                {
+                    Codec = msVideoCodec.H264,
+                    Width = 1920,
+                    Height = 1080,
+                    FrameStruct = msFrameStructure.Interlaced,
+                    FrameRate = msFrameRate.Fps2997,
+                },
+                VideoBitrate = 15000000,
+                AudioCount = 1,
+                SineTone = msSineToneMode.SineToneNoBeep,
+                Audio = new msAudio
+                {
+                    Codec = msAudioCodec.Mp1L2,
+                    SampleRate = 48000,
+                    Channel = msAudioChannel.Stereo,
+                },
+                AudioBitrate = 128000,
+            };
+            var sourceOpenReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdSourceOpen,
+                ClientID = clientId,
+                Source = new msSourceParam { Mode = msSourceMode.SourceTranscode, Name = "XHeadSenderGUIColorbar", Transcode = transcode }
+            };
+            msResponse sourceResp;
+            try
+            {
+                sourceResp = _client.sendRequest(sourceOpenReq, deadline: DateTime.UtcNow.AddSeconds(10));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"[GUI] SourceOpen(Transcode) RPC error: {ex.Status}");
+                throw new InvalidOperationException(
+                    "カラーバーソースの起動で既知のサーバー側エラーが発生しました(mnservice.exe内部の問題、" +
+                    "続報8参照)。RFはChannelStartの時点で既に出力中のため、このまま「RFのみ」で送出は継続します。" +
+                    "注意: このエラーの後、mnservice.exeのgRPCサービスが無応答になることがあります(続報18)。" +
+                    "以降の操作が『wait service timeout』で失敗する場合はmnservice.exeを再起動してください。");
+            }
+            Console.WriteLine($"[GUI] SourceOpen(Transcode) Result={sourceResp.Result} ParamCase={sourceResp.ParamCase}" +
+                (sourceResp.HasErrMessage ? $" ErrMessage={sourceResp.ErrMessage}" : ""));
+            if (sourceResp.ParamCase != msResponse.ParamOneofCase.Source)
+            {
+                throw new InvalidOperationException("SourceOpen failed: " + sourceResp.Result +
+                    (sourceResp.HasErrMessage ? " " + sourceResp.ErrMessage : ""));
+            }
+            var src = sourceResp.Source;
+            _srcHandle = src.HandleID;
+
+            try
+            {
+                AttachSourceToChannel(src, TimeSpan.FromSeconds(10));
+                Console.WriteLine("[GUI] *** カラーバーの送出を開始しました。 ***");
+            }
+            catch
+            {
+                StopCaptureSourceInternal();
+                throw;
+            }
+        }
+
+        /// <summary>
         /// StartCaptureSource/StartUrlSourceで共通の後半処理: EventSourceStatus待機 -> エンジン
         /// 選択 -> ProgramApply -> SourceStart。呼び出し前に _srcHandle をセットしておくこと。
         /// </summary>
