@@ -643,6 +643,90 @@ GUI（`GuiSession.StartUrlSource`、ソース選択に「動画ファイル」�
 CLI・GUI両方から動作確認済みとなった。残っているのは`SourceTranscode`（カラーバー、
 クライアント側のレスポンス処理に既知のバグあり、続報8参照）のGUI統合。
 
+### 続報11 (2026-07-26): 字幕はSourceパイプラインで落ちている、EPGは本当に1件固定と確認
+
+ユーザーから「STUDIOだと再エンコードの関係で字幕が出せないのでは」「EPGが1件しか設定できず
+ずっと繰り返される」という2つの指摘があり、それぞれ事実確認を行った。
+
+**字幕（事実、TSDuckで確認）**: `SourceUrl`テストで使っている実TSファイルをTSDuckの
+`tsanalyze`/`tstables`で解析したところ、`Service 0x0C18(3096)`（実際に`SourceOpen`が
+報告する`Program ID`と一致）には映像・音声2本以外に以下の成分が存在した:
+
+| PID | Component Tag | 内容 |
+|---|---|---|
+| 0x0114 | 0x30 | ARIB subtitle & teletext coding（**字幕本体**） |
+| 0x0115 | 0x38 | 同上（副次的な字幕/文字スーパー） |
+| 0x0840, 0x0850, 0x0857〜 | 0x40, 0x50, 0x57... | DSM-CCセクション（データ放送カルーセル、"Multimedia coding for digital terrestrial broadcasting"） |
+
+一方、`mnservice.exe`が`SourceOpen(Url)`で報告する`Streams`は**常に3本（映像1・音声2）のみ**
+——字幕・データ放送成分は一切含まれない。原因は、ソースの非同期プロービングが内部で
+Media Foundationベースのデマルチプレクサを使っており、これは標準的な映像/音声コーデックしか
+「ストリーム」として認識せず、ARIB字幕（MPEG-2 PES private data）やDSM-CCセクションのような
+放送特有のプライベートデータは最初から見えていない、という説明が最も自然（未確定、推測）。
+つまり**通常の`SourceUrl`→`ProgramApply`経路では、字幕・データ放送は構造的に絶対に
+渡せない**——ユーザーの指摘は正しかった。
+
+**BMLFile経由での字幕再注入を試行（部分的成功）**: `mPSEncodeParam.BMLFile`
+(`xBMLFile.cs`で解読済みの独自バイナリコンテナ)経由なら、Source経由では見えない補助
+ストリームを後から注入できるのではという仮説を検証した。
+
+1. TSDuckで実際の字幕PES(PID 0x0114)を生TSパケットのまま抽出(`tsp -P filter --pid 0x0114`)。
+2. 実際のPMT記述子(`tstables`で確認: Stream Identifier記述子+ISDB Data Component記述子、
+   `data_component_id=0x0008`)から正確な`ESInfo`を組み立て、`xBMLFile.cs`の形式通りに
+   `.xbml`コンテナへパッケージング。
+3. `custom_sender`で`mPSEncodeParam.BMLFile`にこのファイルパスを設定して`ChannelStart`。
+
+**重要なバグ修正**: 最初の試行では`BMLFile`プロパティを一切設定せず(`ChannelOpen`の
+既定値である空文字列のまま)テストしてしまい、`mnts_bml.cc`の存在確認関数
+(`strlen(path)!=0`のガードあり)が呼ばれることすらなく静かに素通りしていた
+——XHEAD-STUDIO自身は内部で常にこのプロパティを固定パスに設定しているため気づかなかった
+差異。`SetPropertyValue(channelStartProps, "mPSEncodeParam", 38, v => v.StrVal = path)`を
+明示的に追加して修正した（`tools/custom_sender`の`--bmlfile`オプション）。
+
+修正後、cdbで`mmts_bml.cc`の存在確認関数（`FUN_1400a56f0`）に直接ブレークポイントを張り、
+`rcx`（第1引数）の文字列を`da`でダンプしたところ、意図した通りのパス
+（`XHeadUSB_aoiro.xbml`）で確かに呼ばれていることを確認した。ログにエラーは一切出ず
+（＝`fopen`成功）、`ChannelStart`/`SourceOpen`/`ProgramApply`/`SourceStart`まで全て
+`ResultSuccess`で完走した。
+
+さらにGhidraで呼び出し元を遡ったところ、存在確認が通った直後に
+**`mazo::mrevolution::mMTSBMLFile`という実在のC++クラス**（vftableのシンボル名から判明）が
+構築・初期化されていることを確認した——スタブではなく、BMLファイル読み込み専用の本格的な
+実装が存在する。ただし、その内部の実際のパース処理（`FUN_1400a5b70`等）まではデコンパイル
+できておらず、**投入した字幕データが実際に正しく解釈されTSに多重化されたかはビットレベルで
+未確認**。
+
+**現状のまとめ（事実と推測を明記）**:
+- 事実: 通常のSource経由では字幕・データ放送成分は構造的に落ちる。
+- 事実: `BMLFile`プロパティを正しく設定すれば、抽出した実字幕データを含む自作コンテナが
+  存在確認・ネイティブクラス初期化まで到達する（cdbで直接確認済み）。
+- 未確認: 実際にTSへ多重化されるか、正しいタイミング（PTS同期）で再生されるか
+  ——ビットレベル検証にはTSDuck等での出力側キャプチャ、または実チューナーでの受信が必要。
+- 推測: 字幕データはオリジナル録画のタイムスタンプのまま注入しており、再エンコードされた
+  映像/音声とは時間軸が一致しない可能性が高い（同期の作り直しは未着手）。
+
+**EPG（事実、`mEPGSimpleParam`の全フィールドをダンプして確認）**:
+
+| FieldID | 名前 | 内容 |
+|---|---|---|
+| 0 | Mode | `Disable`/`PresentFollowingOnly`/`AribPresentFollowingOnly`/`AribSchedule_8Days`（既定257=8日間スケジュール） |
+| 1 | IntervalHours | 0〜8（既定1） |
+| 2 | EventID | 0〜65535（既定4096） |
+| 3 | Type | ジャンル（News/Sport/Movie/...等、単一選択） |
+| 4 | Title | 文字列（maxlen=256） |
+| 5 | Descriptor | 文字列（maxlen=256） |
+
+**ユーザーの指摘通り、`mEPGSimpleParam`は文字通り「1つの番組情報（Title/Descriptor/
+Type/EventID）をスケジュールモードに従って繰り返し配信するだけ」の構造**であり、複数の
+異なる時間帯・タイトルを持つ番組を並べる余地は一切ない。`ChannelOpen`が返す6プロパティ
+グループ（mModulationParam/mMTSChannelParam/mMTSProgramParam/mPSEncodeParam/
+mPSRFPowerAdjust/mEPGSimpleParam）の中に、より高機能な「Advanced EPG」に相当する
+別グループは存在しない——少なくともプロパティツリーのレベルでは、STUDIOだけでなく本ツールも
+含めて、複数番組のEPGを直接設定する手段は今のところ確認できていない。生のEIT
+（Event Information Table）セクションを直接注入するような別経路が`mnservice.exe`内部に
+存在するかどうかは未調査（BMLFileと同様の「別経路」がある可能性はゼロではないが、
+現時点では推測の域を出ない）。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

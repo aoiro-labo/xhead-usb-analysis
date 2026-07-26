@@ -274,7 +274,9 @@ namespace XHeadSender
                                 string urlPath = urlIdx + 1 < args.Length && !args[urlIdx + 1].StartsWith("--")
                                     ? args[urlIdx + 1]
                                     : @"C:\Users\aoiro\Videos\ts\Record_20251109-210722.ts";
-                                RunSourceUrlTest(client, msClient, firstModulationOutputHandle, watcher, urlPath);
+                                int bmlIdx = Array.IndexOf(args, "--bmlfile");
+                                string bmlPath = bmlIdx >= 0 && bmlIdx + 1 < args.Length ? args[bmlIdx + 1] : null;
+                                RunSourceUrlTest(client, msClient, firstModulationOutputHandle, watcher, urlPath, bmlPath);
                             }
                             else
                             {
@@ -1032,7 +1034,7 @@ namespace XHeadSender
         /// mnClientDotNet.dll) gives real default values: Mode=UrlAuto, QueueTime=30000ms,
         /// Timeout=5000ms.
         /// </summary>
-        private static void RunSourceUrlTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher, string filePath)
+        private static void RunSourceUrlTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher, string filePath, string bmlFilePath = null)
         {
             uint clientId = msClient.HandleID;
             Console.WriteLine();
@@ -1088,6 +1090,16 @@ namespace XHeadSender
             SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 2, v => v.IntVal = -10);
             Console.WriteLine("  Overriding before ChannelStart: mModulationParam.Constellation=QPSK(1), " +
                 "mPSRFPowerAdjust.Level=90/PAGain=2/DACGain=-10 (473000kHz table entry, known-good baseline)");
+            if (!string.IsNullOrEmpty(bmlFilePath))
+            {
+                // mPSEncodeParam.BMLFile, FieldID=38 (Type=FieldString) -- unlike XHEAD-STUDIO,
+                // which always points this at a fixed %APPDATA% path internally, our own
+                // ChannelOpen echo leaves it empty by default, so mmts_bml.cc's existence check
+                // is skipped silently (empty string -> strlen==0 -> no fopen, no log line at all).
+                // Must set it explicitly to actually exercise the BML path.
+                SetPropertyValue(channelStartProps, "mPSEncodeParam", 38, v => v.StrVal = bmlFilePath);
+                Console.WriteLine($"  mPSEncodeParam.BMLFile = {bmlFilePath}");
+            }
 
             var earlyStartReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
             earlyStartReq.Properties.AddRange(channelStartProps);

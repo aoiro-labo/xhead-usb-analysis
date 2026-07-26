@@ -74,6 +74,11 @@ analyzeHeadless.bat <projectDir> <projectName> -process mnservice.exe -noanalysi
   ログ文字列から出発する手法で、`mmts_bml.cc`のファイル存在確認関数(`FUN_1400a56f0`)を
   特定できた（[docs/protocol/modulation_capabilities.md](../../docs/protocol/modulation_capabilities.md)
   「続報9」）。
+- `XHeadFindBmlCaller.java` / `XHeadDecodeBmlParser.java` — 存在確認関数(`FUN_1400a56f0`)の
+  呼び出し元をさらに遡り、成功後に呼ばれる実際のコンテンツ処理関数を特定・デコンパイル。
+  `mazo::mrevolution::mMTSBMLFile`という実在のネイティブクラスがBMLファイル処理を担って
+  いることを確認できた（「続報11」）。cdbで`FUN_1400a56f0`に`bu ... "da rcx; g"`を張り、
+  渡された文字列を直接ダンプして「正しいパスで呼ばれているか」を確認する手法と併用した。
 
 ## cdbでの動的解析（ライブブレークポイント）
 
