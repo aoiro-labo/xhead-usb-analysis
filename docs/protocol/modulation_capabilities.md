@@ -1006,6 +1006,45 @@ StopChannel→Close`が全てエラーなく完走し、RTL-SDRで473.6MHz付近
 未確定（推測: 続報9のライフサイクル表との整合性から「teardown」相当の状態遷移と考えるのが
 自然）。
 
+### 続報16 (2026-07-26): STUDIOパリティの残りギャップ（EPG・メディア/コーデック設定）をGUIに追加
+
+「STUDIOでできることを全部このツールでもできるようにしたい」という方針のもと、GUIに未統合
+だった`mEPGSimpleParam`（EPG設定タブ相当）・`mPSEncodeParam`の主要フィールド
+（メディア/コーデック設定タブ相当）を追加した。新規タブ2つ（EPG・メディア/コーデック）を
+`tools/custom_sender`のGUIに追加、CLIには`--epgencode`という専用の切り分けテストを新設。
+
+**追加したフィールド**:
+- **EPG**（`mEPGSimpleParam`）: Mode/IntervalHours/EventID/Type/Title/Descriptor の全6
+  フィールド。続報11で確認済みの「1件のみ・繰り返し配信」という制約はそのまま。
+- **メディア/コーデック**（`mPSEncodeParam`、39フィールド中の主要15個を選定・GUI化）:
+  Performance/VIDEO_PID/AUDIO_PID/Latency/QueueTime、Video.Resolution/AspectRatio/
+  FrameRate、Audio.Channel/SampleRate/Bitrate、Quality.Mode/GOPLength、BMLFile。
+  残り（PixelFormat/ColorPrimaries/TransferCharacteristics/MatrixCoefficients/VideoFormat/
+  SampleFormat/Functions系フラグ/QualityRatioB・P/GOPMinLength・MaxLength/
+  MinBitrateRatio・MaxBitrateRatio/BFrameCount等）は色空間の細部やSTUDIO自身も
+  Debugモードで見せていない項目のため今回は見送った——`docs/gui_debug_mode_comparison.md`
+  で確認済みの通り、STUDIOの「コーデック設定」タブはDebugモード有効時でも「見た目上の
+  差分なし」であり、STUDIOパリティという観点ではVIDEO_PID/AUDIO_PIDの2つで十分カバーできる
+  （それ以外は本ツールが独自に踏み込んでいる範囲）。
+- **BMLFile**もこのタブに統合（`.xbml`ファイル選択ダイアログ付き）——続報9・11で解読した
+  データ放送/字幕再注入の仕組みがGUIから直接使えるようになった。
+
+**ライブ検証（事実）**: `tools/custom_sender --epgencode`（EPG全6フィールド+
+メディア/コーデックの主要フィールドに実運用とは異なる目立つテスト値を設定して
+`ChannelStart`する専用テスト）を新設し、新規restartした`mnservice.exe`に対して実行、
+`ChannelStart: Result=ResultSuccess`で完走することを確認した。GUI側の配線（
+`GuiSession.StartChannel()`）はこのCLIテストと全く同じ`SetPropertyValue`呼び出しパターンを
+使っており、フィールドの受理自体はCLIで検証済み。GUIの新規タブ自体は同じ
+`AddCombo`/`AddNumeric`/`AddTextBox`ヘルパー（既に他タブで動作確認済み）を使っているため、
+描画面は目視確認（1枚目のタブのスクリーンショット）とコードレビューで代替した。
+
+**副次的なバグ修正**: GUIの「動画ファイル」ラジオボタンが、テキストボックス+参照ボタンと
+横並びにするため別コンテナ（`urlRow`というFlowLayoutPanel）に入っていたことが原因で、
+WinFormsの自動排他選択（同じ直接の親コンテナ内でのみ機能する）の対象から外れていた
+——動画ファイルを選択した後に他のソースを選んでも、動画ファイル側のチェックが外れずに
+残るバグがあった。コンテナ構成に関わらず確実に排他制御するよう、明示的な
+`CheckedChanged`ハンドラで対応した。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

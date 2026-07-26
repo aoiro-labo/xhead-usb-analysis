@@ -279,6 +279,10 @@ namespace XHeadSender
                                 string subset = subIdx + 1 < args.Length && !args[subIdx + 1].StartsWith("--") ? args[subIdx + 1] : "all";
                                 RunChannelMetadataTest(client, msClient, firstModulationOutputHandle, watcher, subset);
                             }
+                            else if (args.Contains("--epgencode"))
+                            {
+                                RunEpgEncodeTest(client, msClient, firstModulationOutputHandle, watcher);
+                            }
                             else if (NonIsdbTModes.Any(m => args.Contains("--" + m.ModeName.ToLowerInvariant().Replace("_", ""))))
                             {
                                 var spec = NonIsdbTModes.First(m => args.Contains("--" + m.ModeName.ToLowerInvariant().Replace("_", "")));
@@ -914,6 +918,120 @@ namespace XHeadSender
             if (startResp != null && startResp.Result == msResult.ResultSuccess)
             {
                 Console.WriteLine("  *** ChannelStart SUCCEEDED with custom channel/program metadata. Holding 3s... ***");
+                Thread.Sleep(3000);
+                var stopReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };
+                var stopResp = client.sendRequest(stopReq, deadline: DateTime.UtcNow.AddSeconds(5));
+                Console.WriteLine($"  ChannelStop: Result={stopResp.Result}");
+            }
+
+            CloseChannel(client, clientId, chHandle);
+        }
+
+        /// <summary>
+        /// 2026-07-26: live verification for the EPG (mEPGSimpleParam) and media/codec
+        /// (mPSEncodeParam) fields just added to the GUI's new tabs, before wiring them in.
+        /// Same minimal-risk shape as RunChannelMetadataTest (early ChannelStart, no Source) --
+        /// mPSEncodeParam FieldIDs live inside FieldGroup subgroups (Video=16, Audio=22,
+        /// Quality=36) but per the established msVariant model those children are flat sibling
+        /// entries in the SAME echoed Values list, not nested, so SetPropertyValue addresses them
+        /// directly by their own FieldID same as any top-level field.
+        /// </summary>
+        private static void RunEpgEncodeTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher)
+        {
+            uint clientId = msClient.HandleID;
+            Console.WriteLine();
+            Console.WriteLine("=== EPG + Media/Codec settings test ===");
+            Console.Out.Flush();
+
+            var openReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdChannelOpen,
+                ClientID = clientId,
+                HandleID = outputHandle,
+                Channel = new msChannelParam { Name = "XHeadSenderEpgEncodeTest" }
+            };
+            var openResp = client.sendRequest(openReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ChannelOpen: Result={openResp.Result} ParamCase={openResp.ParamCase}");
+            if (openResp.ParamCase != msResponse.ParamOneofCase.Channel) return;
+            uint chHandle = openResp.Channel.HandleID;
+
+            var addReq = new msRequest { Cmd = msServiceCmd.CmdProgramAdd, ClientID = clientId, HandleID = chHandle };
+            var addResp = client.sendRequest(addReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramAdd: Result={addResp.Result} ParamCase={addResp.ParamCase}");
+            if (addResp.ParamCase != msResponse.ParamOneofCase.Program)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            int programIndex = addResp.Program.Index;
+
+            var commitReq = new msRequest { Cmd = msServiceCmd.CmdProgramCommit, ClientID = clientId, HandleID = chHandle, Index = programIndex };
+            foreach (var prop in addResp.Program.Properties)
+            {
+                commitReq.Properties.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+            var commitResp = client.sendRequest(commitReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramCommit: Result={commitResp.Result}");
+            if (commitResp.Result != msResult.ResultSuccess)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+
+            var channelStartProps = new List<msPropertyParam>();
+            foreach (var prop in openResp.Channel.Properties)
+            {
+                channelStartProps.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+
+            // EPG -- distinctive test values.
+            SetPropertyValue(channelStartProps, "mEPGSimpleParam", 0, v => v.IntVal = 257);
+            SetPropertyValue(channelStartProps, "mEPGSimpleParam", 1, v => v.UintVal = 2);
+            SetPropertyValue(channelStartProps, "mEPGSimpleParam", 2, v => v.UintVal = 12345);
+            SetPropertyValue(channelStartProps, "mEPGSimpleParam", 3, v => v.IntVal = 8);
+            SetPropertyValue(channelStartProps, "mEPGSimpleParam", 4, v => v.StrVal = "EPGTEST");
+            SetPropertyValue(channelStartProps, "mEPGSimpleParam", 5, v => v.StrVal = "EPGTESTDESC");
+
+            // Media/Codec -- distinctive test values, including the group-nested fields
+            // (Video=16/Audio=22/Quality=36 subgroups; their children are flat siblings).
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 0, v => v.IntVal = 3);        // Performance=Standard
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 2, v => v.UintVal = 0x0130);  // VIDEO_PID
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 3, v => v.UintVal = 0x0140);  // AUDIO_PID
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 4, v => v.UintVal = 600);      // Latency
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 5, v => v.UintVal = 2);        // QueueTime
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 7, v => v.IntVal = 4);         // Video.Resolution=_720P
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 8, v => v.IntVal = 6);         // Video.AspectRatio=DAR_4_3
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 11, v => v.IntVal = 4);        // Video.FrameRate=FPS_30
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 18, v => v.IntVal = 3);        // Audio.Channel=Mono
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 19, v => v.IntVal = 44100);    // Audio.SampleRate
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 20, v => v.IntVal = 192000);   // Audio.Bitrate
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 23, v => v.IntVal = 1);        // Quality.Mode=VBRAvgBitRate
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 33, v => v.UintVal = 30);      // Quality.GOPLength
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 37, v => v.StrVal = "");       // DebugFile
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 38, v => v.StrVal = "");       // BMLFile
+
+            Console.WriteLine("  Applied EPG + Media/Codec test overrides.");
+            Console.Out.Flush();
+
+            var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
+            startReq.Properties.AddRange(channelStartProps);
+            msResponse startResp;
+            try
+            {
+                startResp = client.sendRequest(startReq, deadline: DateTime.UtcNow.AddSeconds(10));
+                Console.WriteLine($"  ChannelStart: Result={startResp.Result} Status={startResp.Status} ParamCase={startResp.ParamCase}" +
+                    (startResp.HasErrMessage ? $" ErrMessage={startResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  ChannelStart RPC error: {ex.Status}");
+                startResp = null;
+            }
+            Console.Out.Flush();
+
+            if (startResp != null && startResp.Result == msResult.ResultSuccess)
+            {
+                Console.WriteLine("  *** ChannelStart SUCCEEDED with custom EPG + Media/Codec settings. Holding 3s... ***");
                 Thread.Sleep(3000);
                 var stopReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };
                 var stopResp = client.sendRequest(stopReq, deadline: DateTime.UtcNow.AddSeconds(5));

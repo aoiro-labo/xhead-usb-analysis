@@ -60,9 +60,32 @@ namespace XHeadSender
         private NumericUpDown _numRemoteControlKeyID;
         private NumericUpDown _numServiceNo;
         private ComboBox _cmbCopyFlag;
+        private ComboBox _cmbEPGMode;
+        private NumericUpDown _numEPGIntervalHours;
+        private NumericUpDown _numEPGEventID;
+        private ComboBox _cmbEPGType;
+        private TextBox _txtEPGTitle;
+        private TextBox _txtEPGDescriptor;
+        private ComboBox _cmbEncodePerformance;
+        private NumericUpDown _numVideoPID;
+        private NumericUpDown _numAudioPID;
+        private NumericUpDown _numLatency;
+        private NumericUpDown _numQueueTime;
+        private ComboBox _cmbVideoResolution;
+        private ComboBox _cmbVideoAspectRatio;
+        private ComboBox _cmbVideoFrameRate;
+        private ComboBox _cmbAudioChannel;
+        private NumericUpDown _numAudioSampleRate;
+        private NumericUpDown _numAudioBitrate;
+        private ComboBox _cmbQualityMode;
+        private NumericUpDown _numGOPLength;
+        private TextBox _txtBMLFile;
+        private Button _btnBrowseBML;
         private TextBox _txtLog;
         private TabPage _sourceTab;
         private TabPage _metaTab;
+        private TabPage _epgTab;
+        private TabPage _mediaTab;
         private bool _updatingSourceRadios;
 
         public MainForm()
@@ -78,8 +101,11 @@ namespace XHeadSender
 
             Console.SetOut(new TextBoxWriter(_txtLog));
             Console.WriteLine("XHeadSender GUI 起動。");
-            Console.WriteLine("事前に XHEAD-STUDIO (xhead_studio.exe) を起動してサービスを立ち上げておくこと。");
-            Console.WriteLine("まず「接続」を押してください。");
+            Console.WriteLine("接続方式「mnservice.exe経由」を使う場合は、事前に XHEAD-STUDIO (xhead_studio.exe) を" +
+                "起動してサービスを立ち上げておくこと。");
+            Console.WriteLine("接続方式「直接USB」を使う場合は、逆に xhead_studio.exe / mnservice.exe が" +
+                "起動していないことを確認すること(WinUSBインターフェースを排他保持するため)。");
+            Console.WriteLine("接続方式を選んだら「接続」を押してください。");
         }
 
         private void BuildControls()
@@ -198,6 +224,97 @@ namespace XHeadSender
                 new ComboItem(3, "Forbidden"),
             }, 0, "コピー制御記述子(mMTSProgramParam.CopyFlag)。");
 
+            var epgLayout = NewParamTable();
+            epgLayout.Padding = new Padding(10, 10, 6, 10);
+            _cmbEPGMode = AddCombo(epgLayout, "EPGモード", new[]
+            {
+                new ComboItem(0, "Disable"),
+                new ComboItem(1, "PresentFollowingOnly"),
+                new ComboItem(256, "AribPresentFollowingOnly"),
+                new ComboItem(257, "AribSchedule_8Days (既定)"),
+            }, 3, "mEPGSimpleParam.Mode。1件の番組情報をこのモードに従って繰り返し配信する" +
+                "(複数番組の直接設定手段はハードウェア側に無いことを確認済み、続報11参照)。");
+            _numEPGIntervalHours = AddNumeric(epgLayout, "配信間隔 (時間)", 0, 8, 1,
+                "mEPGSimpleParam.IntervalHours。");
+            _numEPGEventID = AddNumeric(epgLayout, "イベントID", 0, 65535, 4096,
+                "mEPGSimpleParam.EventID。");
+            _cmbEPGType = AddCombo(epgLayout, "ジャンル", new[]
+            {
+                new ComboItem(0, "Undefine (既定)"),
+                new ComboItem(1, "News"), new ComboItem(2, "Sport"), new ComboItem(3, "Movie"),
+                new ComboItem(4, "Drama"), new ComboItem(5, "Music"), new ComboItem(6, "Tabloidshow"),
+                new ComboItem(7, "Varietyshow"), new ComboItem(8, "Animation"), new ComboItem(9, "Documentary"),
+                new ComboItem(10, "Performance"), new ComboItem(11, "Education"), new ComboItem(12, "Welfare"),
+                new ComboItem(255, "Others"),
+            }, 0, "mEPGSimpleParam.Type。");
+            _txtEPGTitle = AddTextBox(epgLayout, "タイトル", "VA-TV", 256,
+                "mEPGSimpleParam.Title。番組タイトル。");
+            _txtEPGDescriptor = AddTextBox(epgLayout, "番組内容", "VA-TV", 256,
+                "mEPGSimpleParam.Descriptor。番組内容の説明文。");
+
+            var mediaLayout = NewParamTable();
+            mediaLayout.Padding = new Padding(10, 10, 6, 4);
+            _cmbEncodePerformance = AddCombo(mediaLayout, "エンコード速度", new[]
+            {
+                new ComboItem(2, "Fast (既定)"), new ComboItem(3, "Standard"),
+                new ComboItem(4, "Slow"), new ComboItem(5, "Slower"),
+            }, 0, "mPSEncodeParam.Performance。遅いほど高品質になる想定(未検証)。");
+            _numVideoPID = AddNumericHex(mediaLayout, "Video PID", 0, 8191, 0x0110,
+                "mPSEncodeParam.VIDEO_PID。STUDIOのDebugモードの「メディア設定」で見えるものと同じ項目。");
+            _numAudioPID = AddNumericHex(mediaLayout, "Audio PID", 0, 8191, 0x0120,
+                "mPSEncodeParam.AUDIO_PID。");
+            _numLatency = AddNumeric(mediaLayout, "レイテンシ (ms)", 0, 1000, 500,
+                "mPSEncodeParam.Latency。");
+            _numQueueTime = AddNumeric(mediaLayout, "キュー時間 (秒)", 0, 30, 1,
+                "mPSEncodeParam.QueueTime。");
+            _cmbVideoResolution = AddCombo(mediaLayout, "映像解像度", new[]
+            {
+                new ComboItem(0, "1080P"), new ComboItem(1, "1080I (既定)"), new ComboItem(2, "1440P"),
+                new ComboItem(3, "1440I"), new ComboItem(4, "720P"), new ComboItem(5, "480P"), new ComboItem(6, "480I"),
+            }, 1, "mPSEncodeParam.Video.Resolution。");
+            _cmbVideoAspectRatio = AddCombo(mediaLayout, "アスペクト比", new[]
+            {
+                new ComboItem(5, "1:1"), new ComboItem(6, "4:3"), new ComboItem(7, "16:9 (既定)"), new ComboItem(8, "2.21:1"),
+            }, 2, "mPSEncodeParam.Video.AspectRatio。");
+            _cmbVideoFrameRate = AddCombo(mediaLayout, "フレームレート", new[]
+            {
+                new ComboItem(0, "23.97"), new ComboItem(1, "24"), new ComboItem(2, "25"),
+                new ComboItem(3, "29.97 (既定)"), new ComboItem(4, "30"), new ComboItem(5, "50"),
+                new ComboItem(6, "59.94"), new ComboItem(7, "60"),
+            }, 3, "mPSEncodeParam.Video.FrameRate。");
+            _cmbAudioChannel = AddCombo(mediaLayout, "音声チャンネル", new[]
+            {
+                new ComboItem(0, "Stereo (既定)"), new ComboItem(2, "DualChannel"), new ComboItem(3, "Mono"),
+            }, 0, "mPSEncodeParam.Audio.Channel。");
+            _numAudioSampleRate = AddNumeric(mediaLayout, "音声サンプルレート (Hz)", 32000, 48000, 48000,
+                "mPSEncodeParam.Audio.SampleRate。");
+            _numAudioBitrate = AddNumeric(mediaLayout, "音声ビットレート (bps)", 128000, 384000, 128000,
+                "mPSEncodeParam.Audio.Bitrate。");
+            _cmbQualityMode = AddCombo(mediaLayout, "レート制御方式", new[]
+            {
+                new ComboItem(0, "CBR (既定)"), new ComboItem(1, "VBRAvgBitRate"), new ComboItem(2, "VBRQuality"),
+            }, 0, "mPSEncodeParam.Quality.Mode。");
+            _numGOPLength = AddNumeric(mediaLayout, "GOP長", 0, 60, 18,
+                "mPSEncodeParam.Quality.GOPLength。");
+            var bmlRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0, 2, 0, 4) };
+            _txtBMLFile = new TextBox { Width = 220, Anchor = AnchorStyles.Left, Margin = new Padding(4, 3, 4, 3) };
+            _btnBrowseBML = new Button { Text = "参照...", Width = 70, Anchor = AnchorStyles.Left };
+            _btnBrowseBML.Click += BtnBrowseBML_Click;
+            bmlRow.Controls.Add(_txtBMLFile);
+            bmlRow.Controls.Add(_btnBrowseBML);
+            int bmlRow_ = mediaLayout.RowStyles.Count;
+            mediaLayout.RowCount = bmlRow_ + 1;
+            var bmlLabel = new Label { Text = "BMLファイル (.xbml)", Anchor = AnchorStyles.Left, AutoSize = true, Padding = new Padding(0, 6, 4, 0) };
+            mediaLayout.Controls.Add(bmlLabel, 0, bmlRow_);
+            mediaLayout.Controls.Add(bmlRow, 1, bmlRow_);
+            mediaLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _toolTip.SetToolTip(bmlLabel,
+                "mPSEncodeParam.BMLFile(FieldID=38)。データ放送/字幕再注入用の.xbmlコンテナへの" +
+                "ローカルパス。空欄なら未使用(通常はこれでよい)。xBMLFile.csの独自バイナリ形式" +
+                "(続報9参照、ARIB STD-B35のBCMLとは別物)。実際に有効なコンテンツかはビットレベル" +
+                "未検証(続報11参照)。");
+            _toolTip.SetToolTip(_txtBMLFile, "空欄なら未使用。");
+
             var modLayout = NewParamTable();
             modLayout.Padding = new Padding(10, 10, 6, 4);
             _numFrequency = AddNumeric(modLayout, "周波数 (kHz)", 0, 1000000, 473000,
@@ -271,12 +388,20 @@ namespace XHeadSender
             var metaTab = new TabPage("チャンネル/番組情報") { AutoScroll = true };
             metaTab.Controls.Add(metaLayout);
 
+            var epgTab = new TabPage("EPG") { AutoScroll = true };
+            epgTab.Controls.Add(epgLayout);
+
+            var mediaTab = new TabPage("メディア/コーデック") { AutoScroll = true };
+            mediaTab.Controls.Add(mediaLayout);
+
             var sourceTab = new TabPage("ソース") { AutoScroll = true };
             sourceTab.Controls.Add(sourceLayout);
 
             var tabControl = new TabControl { Dock = DockStyle.Fill };
             tabControl.TabPages.Add(sourceTab);
             tabControl.TabPages.Add(metaTab);
+            tabControl.TabPages.Add(epgTab);
+            tabControl.TabPages.Add(mediaTab);
             tabControl.TabPages.Add(modTab);
 
             var logLabel = new Label { Dock = DockStyle.Top, Height = 22, Text = "ログ:", Padding = new Padding(8, 6, 0, 0) };
@@ -307,6 +432,8 @@ namespace XHeadSender
             // タブの参照をフィールドに保持しておき、接続方式切り替え時に有効/無効を切り替える。
             _sourceTab = sourceTab;
             _metaTab = metaTab;
+            _epgTab = epgTab;
+            _mediaTab = mediaTab;
         }
 
         private static TableLayoutPanel NewParamTable()
@@ -334,6 +461,13 @@ namespace XHeadSender
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             _toolTip.SetToolTip(lbl, tooltip);
             _toolTip.SetToolTip(num, tooltip);
+            return num;
+        }
+
+        private NumericUpDown AddNumericHex(TableLayoutPanel layout, string label, decimal min, decimal max, decimal value, string tooltip)
+        {
+            var num = AddNumeric(layout, label, min, max, value, tooltip);
+            num.Hexadecimal = true;
             return num;
         }
 
@@ -391,6 +525,26 @@ namespace XHeadSender
                 ServiceNo = (uint)_numServiceNo.Value,
                 ServiceName = _txtServiceName.Text,
                 CopyFlag = SelectedValue(_cmbCopyFlag),
+                EPGMode = SelectedValue(_cmbEPGMode),
+                EPGIntervalHours = (uint)_numEPGIntervalHours.Value,
+                EPGEventID = (uint)_numEPGEventID.Value,
+                EPGType = SelectedValue(_cmbEPGType),
+                EPGTitle = _txtEPGTitle.Text,
+                EPGDescriptor = _txtEPGDescriptor.Text,
+                EncodePerformance = SelectedValue(_cmbEncodePerformance),
+                VideoPID = (uint)_numVideoPID.Value,
+                AudioPID = (uint)_numAudioPID.Value,
+                Latency = (uint)_numLatency.Value,
+                QueueTime = (uint)_numQueueTime.Value,
+                VideoResolution = SelectedValue(_cmbVideoResolution),
+                VideoAspectRatio = SelectedValue(_cmbVideoAspectRatio),
+                VideoFrameRate = SelectedValue(_cmbVideoFrameRate),
+                AudioChannel = SelectedValue(_cmbAudioChannel),
+                AudioSampleRate = (int)_numAudioSampleRate.Value,
+                AudioBitrate = (int)_numAudioBitrate.Value,
+                QualityMode = SelectedValue(_cmbQualityMode),
+                GOPLength = (uint)_numGOPLength.Value,
+                BMLFile = _txtBMLFile.Text,
             };
         }
 
@@ -423,10 +577,13 @@ namespace XHeadSender
             bool direct = UseDirectBackend;
             _sourceTab.Enabled = !direct;
             _metaTab.Enabled = !direct;
+            _epgTab.Enabled = !direct;
+            _mediaTab.Enabled = !direct;
             if (direct)
             {
-                Console.WriteLine("[GUI] 直接USBモードを選択 -- Source添付・チャンネル/番組メタデータは利用できません。" +
-                    "mnservice.exe/xhead_studio.exeを事前に停止しておいてください。");
+                Console.WriteLine("[GUI] 直接USBモードを選択 -- Source添付・チャンネル/番組メタデータ・EPG・" +
+                    "メディア/コーデック設定は利用できません(いずれもmnservice.exe側のソフトウェア機能で、" +
+                    "レジスタバスに対応物が無いため)。mnservice.exe/xhead_studio.exeを事前に停止しておいてください。");
             }
         }
 
@@ -476,6 +633,17 @@ namespace XHeadSender
                 {
                     _txtUrlPath.Text = dlg.FileName;
                     _rbSourceUrl.Checked = true;
+                }
+            }
+        }
+
+        private void BtnBrowseBML_Click(object sender, EventArgs e)
+        {
+            using (var dlg = new OpenFileDialog { Filter = "BMLコンテナ (*.xbml)|*.xbml|すべてのファイル (*.*)|*.*" })
+            {
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    _txtBMLFile.Text = dlg.FileName;
                 }
             }
         }

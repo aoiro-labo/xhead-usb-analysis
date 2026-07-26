@@ -165,12 +165,48 @@ namespace XHeadSender
                 Program.SetPropertyValue(channelStartProps, "mMTSProgramParam", 11, v => v.IntVal = cfg.CopyFlag);
                 Program.SetPropertyValue(channelStartProps, "mMTSProgramParam", 12, v => v.StrVal = cfg.ServiceName ?? "");
 
+                // EPG (mEPGSimpleParam) -- STUDIOの「EPG設定」タブ相当。1件のみ・繰り返し配信という
+                // 制約はハードウェア/ファームウェア側の仕様(続報11で確認済み)。
+                Program.SetPropertyValue(channelStartProps, "mEPGSimpleParam", 0, v => v.IntVal = cfg.EPGMode);
+                Program.SetPropertyValue(channelStartProps, "mEPGSimpleParam", 1, v => v.UintVal = cfg.EPGIntervalHours);
+                Program.SetPropertyValue(channelStartProps, "mEPGSimpleParam", 2, v => v.UintVal = cfg.EPGEventID);
+                Program.SetPropertyValue(channelStartProps, "mEPGSimpleParam", 3, v => v.IntVal = cfg.EPGType);
+                Program.SetPropertyValue(channelStartProps, "mEPGSimpleParam", 4, v => v.StrVal = cfg.EPGTitle ?? "");
+                Program.SetPropertyValue(channelStartProps, "mEPGSimpleParam", 5, v => v.StrVal = cfg.EPGDescriptor ?? "");
+
+                // メディア/コーデック設定 (mPSEncodeParam) -- STUDIOの「メディア設定」(Video/Audio
+                // PID)・「コーデック設定」タブ相当。Video(FieldID=16)/Audio(22)/Quality(36)は
+                // FieldGroupだが、msVariantの配線上は子フィールドがフラットな兄弟エントリとして
+                // 同じValuesリストに載るため、直接FieldIDで指定する。
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 0, v => v.IntVal = cfg.EncodePerformance);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 2, v => v.UintVal = cfg.VideoPID);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 3, v => v.UintVal = cfg.AudioPID);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 4, v => v.UintVal = cfg.Latency);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 5, v => v.UintVal = cfg.QueueTime);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 7, v => v.IntVal = cfg.VideoResolution);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 8, v => v.IntVal = cfg.VideoAspectRatio);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 11, v => v.IntVal = cfg.VideoFrameRate);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 18, v => v.IntVal = cfg.AudioChannel);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 19, v => v.IntVal = cfg.AudioSampleRate);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 20, v => v.IntVal = cfg.AudioBitrate);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 23, v => v.IntVal = cfg.QualityMode);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 33, v => v.UintVal = cfg.GOPLength);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 37, v => v.StrVal = cfg.DebugFile ?? "");
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 38, v => v.StrVal = cfg.BMLFile ?? "");
+
                 Console.WriteLine($"[GUI] ChannelStart: Frequency={cfg.Frequency}kHz Constellation={cfg.Constellation} " +
                     $"Bandwidth={cfg.Bandwidth} FFT={cfg.FFT} CodeRate={cfg.CodeRate} GuardInterval={cfg.GuardInterval} " +
                     $"TimeInterleavce={cfg.TimeInterleavce} Level={cfg.Level} PAGain={cfg.PAGain} DACGain={cfg.DACGain}");
                 Console.WriteLine($"[GUI] Channel/Program: NetworkName={cfg.NetworkName} TSName={cfg.TSName} " +
                     $"RegionID={cfg.RegionID} BroadcasterID={cfg.BroadcasterID} RemoteControlKeyID={cfg.RemoteControlKeyID} " +
                     $"ServiceNo={cfg.ServiceNo} ServiceName={cfg.ServiceName} CopyFlag={cfg.CopyFlag}");
+                Console.WriteLine($"[GUI] EPG: Mode={cfg.EPGMode} IntervalHours={cfg.EPGIntervalHours} " +
+                    $"EventID={cfg.EPGEventID} Type={cfg.EPGType} Title={cfg.EPGTitle} Descriptor={cfg.EPGDescriptor}");
+                Console.WriteLine($"[GUI] Media/Codec: Performance={cfg.EncodePerformance} VideoPID=0x{cfg.VideoPID:X} " +
+                    $"AudioPID=0x{cfg.AudioPID:X} Latency={cfg.Latency} QueueTime={cfg.QueueTime} " +
+                    $"Resolution={cfg.VideoResolution} AspectRatio={cfg.VideoAspectRatio} FrameRate={cfg.VideoFrameRate} " +
+                    $"AudioChannel={cfg.AudioChannel} SampleRate={cfg.AudioSampleRate} AudioBitrate={cfg.AudioBitrate} " +
+                    $"QualityMode={cfg.QualityMode} GOPLength={cfg.GOPLength} BMLFile={cfg.BMLFile}");
 
                 var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = _msClient.HandleID, HandleID = _chHandle };
                 startReq.Properties.AddRange(channelStartProps);
