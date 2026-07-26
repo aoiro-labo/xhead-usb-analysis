@@ -968,6 +968,42 @@ GUIタブ、`GuiSession.StartChannel()`）。
 同じ「`ChannelStart`がハングする」という症状でも、原因は一枚岩ではなかった、という点も
 記録しておく。
 
+### 続報15 (2026-07-26): `tools/custom_sender`のGUIに「直接USB」バックエンドを統合、送出停止シーケンスも新規発見
+
+「STUDIOにある設定をこのツールでmnservice.exe経由でもそうでなくても使えるようにしたい」
+という方針のもと、`tools/direct_usb`（`XHeadDirectUsb.exe`、WinUSB直叩き・mnservice.exe
+完全非依存）のロジックを`tools/custom_sender`のGUIに直接統合した（新規`DirectUsbSession.cs`
+——`tools/direct_usb/Program.cs`の`RunConfigureSequence`等をインスタンスメソッド化した
+移植版、ロジックは同一）。
+
+GUIに「接続方式」トグル（mnservice.exe経由 / 直接USB）を追加し、「直接USB」を選ぶと:
+- `GuiSession`(gRPC)の代わりに`DirectUsbSession`(WinUSB直接)を使う
+- 対応範囲は変調パラメータ+RF電力設定のみ——「ソース」「チャンネル/番組情報」タブは
+  無効化される（`mMTSChannelParam`等はレジスタバスに現れないソフトウェア側の値であり、
+  `mnservice.exe`のエンコーダ/マルチプレクサが無いと意味を持たないため。続報8で確認済み）
+- `mnservice.exe`/`xhead_studio.exe`は事前に停止しておく必要がある（WinUSBインターフェースを
+  排他保持するため、`DirectUsbSession.Open()`は素直に失敗する）
+
+**ライブ検証（事実）**: CLIに`--directtest`（gRPC接続を一切試みず`DirectUsbSession`単体を
+検証する経路）を追加し、`mnservice.exe`完全停止状態で実行。`Open→StartChannel→8秒保持→
+StopChannel→Close`が全てエラーなく完走し、RTL-SDRで473.6MHz付近に**+44dB**のRF出力を実測
+（`tools/rtlsdr_analysis/rtlsdr_directtest_scan1/2.csv`）——`tools/custom_sender`のGUIから
+`mnservice.exe`を一切経由しない送出が、既存の`tools/direct_usb`単体ツールと同じ確からしさで
+動作することを確認した。
+
+**新規発見: 送出停止シーケンス**。`tools/direct_usb`にはこれまで確立された「送出停止」手順が
+無かった（`--configure`は起動のみで、レジスタ書き込みだけの一方通行だった）。今回、
+`mnservice.exe`側の`CmdChannelStop`時に観測されていた`0x0600=0x2000`（続報9のライフサイクル
+表で「ChannelStop/teardown」と推定していた値）を実験的に送信したところ、**RTL-SDRで確認した
+限り実際にRF出力が停止した**（+44dBの明確なプラトーから、停止コマンド送信後の再スキャンでは
++7〜11dB程度——ノイズフロア相当——まで低下、`tools/rtlsdr_analysis/rtlsdr_afterstop.csv`）。
+`tools/direct_usb`側にも同じ知見を反映する余地がある（未反映、今後の課題）。
+
+**事実と推測の切り分け**: RF出力の消失は事実として確認したが、これが「モジュレータの完全な
+停止」なのか「単に搬送波レベルが下がっただけ」なのか、レジスタレベルでの厳密な意味は
+未確定（推測: 続報9のライフサイクル表との整合性から「teardown」相当の状態遷移と考えるのが
+自然）。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

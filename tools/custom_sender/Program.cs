@@ -118,6 +118,11 @@ namespace XHeadSender
                 return 0;
             }
 
+            if (args.Contains("--directtest"))
+            {
+                return RunDirectUsbTest();
+            }
+
             EnsureNativeDllPathConfigured();
 
             Console.WriteLine($"[XHeadSender] connecting to {ServiceAddress} ...");
@@ -323,6 +328,38 @@ namespace XHeadSender
             finally
             {
                 channel.ShutdownAsync().Wait();
+            }
+        }
+
+        /// <summary>
+        /// 2026-07-26: GUIの「直接USB」バックエンド(DirectUsbSession)を、gRPC接続を一切試みない
+        /// 状態で単体検証するためのCLIパス。mnservice.exe/xhead_studio.exeを事前に停止しておく
+        /// こと(WinUSBインターフェースを排他保持するため)。既定値(473000kHz/QPSK/6MHz/...)で
+        /// Open->StartChannel->8秒保持->StopChannel(実験的)->Closeを一通り実行する。
+        /// </summary>
+        private static int RunDirectUsbTest()
+        {
+            Console.WriteLine("=== Direct USB backend test (bypasses mnservice.exe entirely) ===");
+            var session = new DirectUsbSession();
+            var cfg = new ModulationConfig();
+            try
+            {
+                session.Open();
+                session.StartChannel(cfg);
+                Console.WriteLine("  Holding 8s -- check RTL-SDR now...");
+                System.Threading.Thread.Sleep(8000);
+                session.StopChannel();
+                Console.WriteLine("Done.");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("EXCEPTION: " + ex.Message);
+                return 1;
+            }
+            finally
+            {
+                session.Close();
             }
         }
 

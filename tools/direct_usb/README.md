@@ -216,3 +216,20 @@ XHeadDirectUsb.exe --stream --seconds 3
   追加する余地がある。
 - Mode（ISDB_T以外への切替）をこの直接経路で試すかどうかは、実機を壊すリスクを
   伴う判断のため、着手前に方針を相談すること。
+
+### 続報 (2026-07-26): 送出停止シーケンスを発見、GUIに統合
+
+これまで本ツールには「送出停止」の確立された手順が無かった（`--configure`は起動のみの
+一方通行）。`mnservice.exe`側の`CmdChannelStop`時に観測されていた`0x0600=0x2000`
+（[tools/usb_capture/README.md](../usb_capture/README.md)「続報9」のライフサイクル表で
+「ChannelStop/teardown」と推定していた値）を実験的に単体送信したところ、**RTL-SDRで実際に
+RF出力の停止を確認できた**（+44dBの明確なプラトーから、停止コマンド送信後はノイズフロア
+相当の+7〜11dBまで低下）。詳細・検証手順は
+[docs/protocol/modulation_capabilities.md](../../docs/protocol/modulation_capabilities.md)
+「続報15」を参照。
+
+このロジックは`tools/custom_sender`のGUI（`DirectUsbSession.cs`）に統合済み——GUIの
+「接続方式」トグルで「直接USB」を選ぶと、`mnservice.exe`を一切経由せずWinUSB直接で
+変調パラメータ+RF電力設定を送出できる（対応範囲はレジスタで表現できるものに限られ、
+Source添付・チャンネル/番組メタデータは非対応）。本ツール(`XHeadDirectUsb.exe`)自体には
+まだ`--stop`相当のコマンドラインオプションを追加していない（今後の課題）。

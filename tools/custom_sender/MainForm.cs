@@ -25,7 +25,12 @@ namespace XHeadSender
         }
 
         private readonly GuiSession _session = new GuiSession();
+        private readonly DirectUsbSession _directSession = new DirectUsbSession();
         private readonly ToolTip _toolTip = new ToolTip { AutoPopDelay = 15000, InitialDelay = 300, ReshowDelay = 100 };
+
+        private RadioButton _rbBackendService;
+        private RadioButton _rbBackendDirect;
+        private bool UseDirectBackend => _rbBackendDirect.Checked;
 
         private Button _btnConnect;
         private Button _btnStart;
@@ -56,10 +61,12 @@ namespace XHeadSender
         private NumericUpDown _numServiceNo;
         private ComboBox _cmbCopyFlag;
         private TextBox _txtLog;
+        private TabPage _sourceTab;
+        private TabPage _metaTab;
 
         public MainForm()
         {
-            Text = "XHeadSender GUI -- mnservice.exe経由の直接送出ツール";
+            Text = "XHeadSender GUI -- 直接送出ツール（mnservice.exe経由 / 直接USB 選択可）";
             Width = 700;
             Height = 780;
             StartPosition = FormStartPosition.CenterScreen;
@@ -98,6 +105,22 @@ namespace XHeadSender
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(8, 4, 0, 0),
             };
+
+            var backendPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 28, Padding = new Padding(8, 2, 8, 2) };
+            var backendLabel = new Label { Text = "接続方式:", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 4, 6, 0) };
+            _rbBackendService = new RadioButton { Text = "mnservice.exe経由（既定、全機能）", AutoSize = true, Checked = true, Anchor = AnchorStyles.Left };
+            _rbBackendDirect = new RadioButton { Text = "直接USB（mnservice.exe不要、変調/RF電力のみ）", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(12, 0, 0, 0) };
+            _toolTip.SetToolTip(_rbBackendService,
+                "従来通りgRPC経由でmnservice.exeに接続する。Source添付(映像/音声)・チャンネル/番組メタデータも利用可能。");
+            _toolTip.SetToolTip(_rbBackendDirect,
+                "tools/direct_usbと同じロジックでWinUSB経由で実機に直接コントロール転送を送る。" +
+                "mnservice.exe/xhead_studio.exeは事前に停止しておくこと(WinUSBインターフェースを排他保持するため)。" +
+                "変調パラメータ+RF電力設定のみ対応 -- Source添付・チャンネル/番組メタデータはmnservice.exe側のソフトウェア機能のため使えない。");
+            _rbBackendService.CheckedChanged += BackendChanged;
+            _rbBackendDirect.CheckedChanged += BackendChanged;
+            backendPanel.Controls.Add(backendLabel);
+            backendPanel.Controls.Add(_rbBackendService);
+            backendPanel.Controls.Add(_rbBackendDirect);
 
             var btnPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8, 4, 8, 4) };
             _btnConnect = new Button { Text = "① 接続", Width = 100 };
@@ -267,8 +290,13 @@ namespace XHeadSender
             Controls.Add(tabControl);
             Controls.Add(logPanel);
             Controls.Add(btnPanel);
+            Controls.Add(backendPanel);
             Controls.Add(_lblStatus);
             Controls.Add(warnLabel);
+
+            // タブの参照をフィールドに保持しておき、接続方式切り替え時に有効/無効を切り替える。
+            _sourceTab = sourceTab;
+            _metaTab = metaTab;
         }
 
         private static TableLayoutPanel NewParamTable()
@@ -362,12 +390,33 @@ namespace XHeadSender
             _lblStatus.ForeColor = color;
         }
 
+        private void BackendChanged(object sender, EventArgs e)
+        {
+            bool direct = UseDirectBackend;
+            _sourceTab.Enabled = !direct;
+            _metaTab.Enabled = !direct;
+            if (direct)
+            {
+                Console.WriteLine("[GUI] 直接USBモードを選択 -- Source添付・チャンネル/番組メタデータは利用できません。" +
+                    "mnservice.exe/xhead_studio.exeを事前に停止しておいてください。");
+            }
+        }
+
         private async void BtnConnect_Click(object sender, EventArgs e)
         {
             _btnConnect.Enabled = false;
+            _rbBackendService.Enabled = false;
+            _rbBackendDirect.Enabled = false;
             try
             {
-                await Task.Run(() => _session.Connect());
+                if (UseDirectBackend)
+                {
+                    await Task.Run(() => _directSession.Open());
+                }
+                else
+                {
+                    await Task.Run(() => _session.Connect());
+                }
                 SetStatus("接続済み（送出停止中）", Color.SteelBlue);
                 _btnStart.Enabled = true;
                 _btnDisconnect.Enabled = true;
@@ -377,6 +426,8 @@ namespace XHeadSender
                 Console.WriteLine("接続失敗: " + ex.Message);
                 SetStatus("未接続（接続失敗）", Color.Firebrick);
                 _btnConnect.Enabled = true;
+                _rbBackendService.Enabled = true;
+                _rbBackendDirect.Enabled = true;
             }
         }
 
@@ -406,6 +457,25 @@ namespace XHeadSender
             _btnStart.Enabled = false;
             SetSourceControlsEnabled(false);
             var cfg = ReadConfigFromForm();
+
+            if (UseDirectBackend)
+            {
+                try
+                {
+                    await Task.Run(() => _directSession.StartChannel(cfg));
+                    SetStatus("送出中（直接USB、RFのみ）", Color.SeaGreen);
+                    _btnStop.Enabled = true;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("送出開始失敗: " + ex.Message);
+                    SetStatus("接続済み（送出失敗）", Color.Firebrick);
+                    _btnStart.Enabled = true;
+                    SetSourceControlsEnabled(true);
+                }
+                return;
+            }
+
             bool attachCapture = _rbSourceCapture.Checked;
             bool attachUrl = _rbSourceUrl.Checked;
             string urlPath = _txtUrlPath.Text;
@@ -451,7 +521,14 @@ namespace XHeadSender
             _btnStop.Enabled = false;
             try
             {
-                await Task.Run(() => _session.StopChannel());
+                if (UseDirectBackend)
+                {
+                    await Task.Run(() => _directSession.StopChannel());
+                }
+                else
+                {
+                    await Task.Run(() => _session.StopChannel());
+                }
             }
             catch (Exception ex)
             {
@@ -472,7 +549,14 @@ namespace XHeadSender
             _btnStop.Enabled = false;
             try
             {
-                await Task.Run(() => _session.Disconnect());
+                if (UseDirectBackend)
+                {
+                    await Task.Run(() => _directSession.Close());
+                }
+                else
+                {
+                    await Task.Run(() => _session.Disconnect());
+                }
             }
             catch (Exception ex)
             {
@@ -482,6 +566,8 @@ namespace XHeadSender
             {
                 SetStatus("未接続", Color.DimGray);
                 _btnConnect.Enabled = true;
+                _rbBackendService.Enabled = true;
+                _rbBackendDirect.Enabled = true;
                 SetSourceControlsEnabled(true);
             }
         }
@@ -489,6 +575,7 @@ namespace XHeadSender
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             try { _session.Disconnect(); } catch { /* best-effort cleanup on exit */ }
+            try { _directSession.Close(); } catch { /* best-effort cleanup on exit */ }
             base.OnFormClosing(e);
         }
     }
