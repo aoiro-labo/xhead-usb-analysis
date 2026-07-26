@@ -15,9 +15,11 @@
 # 事前に mnservice.exe を停止しておくこと（WinUSBインターフェースは排他所有のため）
 XHeadDirectUsb.exe                              # 既定: 読み取り専用スキャン（安全）
 XHeadDirectUsb.exe --write --addr 1202 --data 000737A8   # 指定レジスタへ書き込み（要注意）
-XHeadDirectUsb.exe --configure                  # CmdChannelStart相当のフル設定シーケンスを再現
+XHeadDirectUsb.exe --configure                  # CmdChannelStart相当のフル設定シーケンスを再現(既定Mode=ISDB_T)
 XHeadDirectUsb.exe --configure --freq 473000 --constellation 1 --bandwidth 6 \
     --fft 1 --coderate 3 --guardinterval 1 --timeinterleave 3 --dacgain -10
+XHeadDirectUsb.exe --configure --mode 0 --constellation 4 --bandwidth 6 --fft 1 \
+    --coderate 3 --guardinterval 1 --dacgain -10   # 続報3: --modeでDVB_T/ATSC/J83B等に対応
 XHeadDirectUsb.exe --stream --seconds 3          # --configure相当 + バルクOUTでnull-TSを指定秒数送出
 XHeadDirectUsb.exe --stop                        # 送出停止（0x0600=0x2000、RTL-SDRで停止を実測確認済み）
 ```
@@ -255,3 +257,40 @@ RTL-SDRで473.6MHz付近に+37.7dBの明確なRF出力を実測、`--stop`で停
 `mnservice.exe`を一切経由しない非ISDB-Tモード送出の最初の実証例——本プロジェクトの
 「mnservice.exe完全非依存の送出」（続報7・15）と「非ISDB-Tモードへの切替」（続報12・13）が
 初めて同時に成り立った。ビットレベルでの規格準拠は他の全RFテストと同じく未検証。
+
+### 続報3 (2026-07-27): `--mode`引数を追加、ATSC/J83Bも本ツール単体で送出成功
+
+`docs/protocol/modulation_capabilities.md`「続報19」の詳細だが、要点をここにも記録する。
+
+これまで`RunConfigureSequence`は`0x0680`を「意味不明な定数5」として常に固定送信していたが、
+ATSC/J83Bの実機ネイティブレジスタ書き込みをcdbで新たに捕捉した結果、`0x0680`の書き込み値が
+4モード全て（DVB_T=0/ATSC=2/J83B=3/ISDB_T=5）で`mModulationParam.Mode`のraw enum値と
+完全に一致することが判明した——単なる定数ではなく、**モード選択レジスタだった可能性が高い**。
+あわせて、ATSC/J83Bは`Bandwidth`/`FFT`/`CodeRate`/`GuardInterval`の各レジスタを一切
+書き込まないこと（Constellationのみで完結するフィールド構造のため）、DVB_TはISDB_Tと違い
+`TimeInterleavce`を書かないことも確認した。
+
+これを受けて`--mode <値>`引数を追加し、`0x0680`を実際のMode値として送信、書き込む
+フィールド集合もMode別に対応させた。実機での書き込み挙動を未検証のMode
+（`J83A`=1・`DTMB`=4・`J83C`=6・`DVB_T2`=7）を指定した場合はデフォルトで拒否し、
+`--force-untested-mode`を明示しない限り実行できない（特にDTMB/J83Cは`mnservice.exe`経由でも
+本物のサービスハングが確認済みのため）:
+
+```
+XHeadDirectUsb.exe --configure --mode 0 --constellation 4 --bandwidth 6 --fft 1 \
+    --coderate 3 --guardinterval 1 --dacgain -10                        # DVB_T
+XHeadDirectUsb.exe --configure --mode 2 --constellation 0 --dacgain -10 # ATSC (8VSB固定)
+XHeadDirectUsb.exe --configure --mode 3 --constellation 1 --dacgain -10 # J83B (QAM64)
+```
+
+ライブ検証: DVB_T（正しい`--mode 0`）で+37.8dB、ATSCで+38.0dB、J83Bで+35.6dBをRTL-SDRで
+実測、いずれも`--stop`でノイズフロアまで低下することを確認。また、修正前の
+「`0x680=5`のままDVB_TのConstellation値だけ送っていた」旧DVB_Tテスト（続報2）の結果と
+新しい正しい`--mode 0`の結果を直接比較したところ、電力スペクトルの形状はノイズレベル
+（差分最大1.7dB程度）でほぼ同一だった——`0x680`が物理層の変調方式を直接切り替えている
+のか、`mnservice.exe`内部向けのソフトウェア的なフラグに過ぎないのかは、この粗い電力スキャン
+だけでは判別できず未確定（詳細は`modulation_capabilities.md`「続報19」）。
+
+これで「安全に成功する」と確認済みの3モード（DVB_T/ATSC/J83B）全てが、本ツール単体で
+`mnservice.exe`非依存の送出に対応した。`tools/custom_sender`のGUI「直接USB」バックエンド
+（`DirectUsbSession.cs`）はISDB_T専用のまま変更していない（Mode切替のGUI統合は未着手）。

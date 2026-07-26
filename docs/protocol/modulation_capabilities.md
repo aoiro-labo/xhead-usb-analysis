@@ -1162,6 +1162,75 @@ Status(StatusCode="Cancelled", Detail="wait service timeout", ...)
 「既知の警告が出る」だけでなく「送出後は`mnservice.exe`の再起動が必要になる場合がある」旨を
 明示する警告に更新する（後続の作業で対応）。
 
+### 続報19 (2026-07-27): ATSC/J83Bも`mnservice.exe`完全非依存で送出成功——モード選択レジスタ`0x0680`を新規発見
+
+続報17ではDVB_Tのみ`direct_usb`単体での送出に成功していたが、続報13で安全に成功すると
+確認済みの残り2モード（`ATSC`・`J83B`）にも同じ手法を拡張できるか検証した。
+
+**手順（事実）**: 新規に起動し直した`mnservice.exe`をcdbで包み、レジスタ書き込みヘルパー
+（`mnservice+0x88500`/`0x883b0`、続報15と同じオフセット）にブレークポイントを張った状態で
+`tools/custom_sender --atsc`・`--j83b`を順に実行し、実際の`ChannelStart`が書き込むレジスタ列を
+丸ごと捕捉した（cdbのオーバーヘッド下でも今回は両モードとも`_MODCMD_START Fail`は発生せず、
+素の速度と同じく成功した——DVB_Tで見られたタイミング問題は再現しなかった）。
+
+**新発見: `0x0680`はレジスタ書き込みの「モード選択」フラグである可能性が高い（事実+推測）**。
+ATSC（`mModulationParam.Mode`=2）の捕捉ログでは`0x0680 <= 2`、J83B（Mode=3）では
+`0x0680 <= 3`という書き込みが確認された。過去に採取済みのDVB_T（Mode=0）キャプチャログ
+（`cdb_dvbt_capture_*.log`）を読み返すと`0x0680 <= 0`となっており、さらに`tools/direct_usb`の
+`RunConfigureSequence`が以前から送っていた「意味不明な定数」`0x0680=5`はISDB_TのMode raw値
+そのものだったと判明した——**4つのモード全てで`0x0680`の書き込み値が`mModulationParam.Mode`の
+raw enum値と完全に一致**（DVB_T=0, ATSC=2, J83B=3, ISDB_T=5）。続報17で「別途の
+モード選択レジスタは観測範囲内に見当たらなかった」としていたのは、DVB_TのMode raw値が
+たまたま`0`で、書き込みが「無変化」に見えて意味を汲み取れなかったためだった。
+
+**もう一つの発見（事実）**: ATSC・J83Bのレジスタ列には、ISDB_T/DVB_Tで書かれている
+Bandwidth(`0x0684`)/FFT(`0x0691`)/CodeRate(`0x0693`)/GuardInterval(`0x0692`)の書き込みが
+**一切存在しなかった**——これはフィールドツリー上でもATSC/J83BがConstellationしか持たない
+（8VSB固定・QAM64/256のみ）ことと整合する。またDVB_TはISDB_Tと違い`TimeInterleavce`
+(`0x0694`)フィールド自体を持たないため、この書き込みも本来不要だったことが今回はっきりした
+（続報17の時点では気づかれず、ISDB_T用のフルセットをそのまま流用していた）。
+
+**`tools/direct_usb`の改修（事実）**: `RunConfigureSequence`に`--mode`引数を追加し、
+`0x0680`をハードコード定数ではなく実際のMode raw値として送るよう修正。あわせて
+書き込むフィールド集合をMode別に対応させた（DVB_T/ISDB_Tのみ4つのOFDM系フィールドを送り、
+ISDB_Tのみさらに`TimeInterleavce`も送る、ATSC/J83BはConstellationのみ）。安全のため、
+実機での書き込み挙動が未検証なMode（`J83A`/`DTMB`/`J83C`/`DVB_T2`）を`--mode`に指定した場合は
+デフォルトで拒否し、`--force-untested-mode`を明示的に付けない限り実行できないようにした——
+特にDTMB/J83Cは`mnservice.exe`経由でも本物のサービスハングが確認済み（続報13）であり、
+レジスタレベルでの直接操作はさらにリスクが高いと判断したため。
+
+**ライブ検証（事実）**: 修正版の`--configure --mode 0 --constellation 4 ...`（DVB_T、正しい
+`0x0680=0`）を実行しRTL-SDRでスキャンしたところ473.6MHz付近で+37.8dB。続報17の
+旧版（`0x0680=5`のまま、実質ISDB_Tモード選択のままDVB_TのConstellation raw値だけ書いていた
+状態）のスキャン結果と直接比較すると、**両者の電力スペクトル形状はノイズレベル（差分最大
+1.7dB程度）の範囲でほぼ同一**だった。続けて`--configure --mode 2 --constellation 0
+--dacgain -10`（ATSC）で+38.0dB、`--configure --mode 3 --constellation 1 --dacgain -10`
+（J83B）で+35.6dBを実測、`--stop`で両方ともノイズフロアまで低下することも確認した。
+実機は`Get-PnpDevice`で終始`Status=OK`。テスト後`mnservice.exe`を新規起動し直し、
+`direct_usb --directtest`が想定通り「WinUSBインターフェースを排他保持されている」エラーで
+失敗する（＝`mnservice.exe`が正常にインターフェースを掌握できている）ことを確認して復旧完了。
+
+**結論（事実と推測を明記）**:
+- **事実**: `ATSC`・`J83B`も`mnservice.exe`を一切起動しない状態で、`direct_usb`単体の
+  レジスタ書き込みだけで送出・RF出力・停止までの一連の操作が完結する。これでDVB_T/ATSC/J83B
+  という「安全に成功する」と確認済みの3モード全てが`mnservice.exe`非依存で送出可能になった。
+- **事実**: `0x0680`の書き込み値は4モード全てで`Mode`のraw enum値と一致する。
+- **推測（未確定）**: `0x680=0`（正しいDVB_T選択）と`0x680=5`（誤ってISDB_Tのまま）とで
+  電力スペクトルに測定可能な差が出なかったことから、`0x680`は物理層の変調方式（OFDM前段の
+  復調エンジン選択等）を直接切り替えるレジスタではなく、`mnservice.exe`内部の状態管理・
+  ログ用途のソフトウェア的なフラグに過ぎない可能性がある。あるいは、電力スペクトルの
+  概形だけでは判別できないビット/フレーム構造レベルの違い（パイロットパターン、ガード
+  インターバルの実際の挿入等）に影響している可能性も排除できない——今回の粗い電力スキャンでは
+  判別不能。ビットレベルの復調（実際のISDB-T/DVB-T復調器での受信、または詳細なIQ解析）を
+  行わない限り、どちらが正しいか確定できない。
+- 未確認: この「`0x680`=Mode raw値・フィールド集合はMode依存」という理解が`J83A`/`DTMB`/
+  `J83C`/`DVB_T2`にも当てはまるかは未検証（上記の理由により意図的に未実施）。
+
+再現コード: `tools/direct_usb/Program.cs`の`RunConfigureSequence`（`--mode`引数）。
+RF実測データ: `tools/rtlsdr_analysis/rtlsdr_dvbt_mode0_scan1/2.csv`・
+`rtlsdr_atsc_direct_scan1/2.csv`・`rtlsdr_j83b_direct_scan1/2.csv`・
+`rtlsdr_j83b_direct_afterstop.csv`。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

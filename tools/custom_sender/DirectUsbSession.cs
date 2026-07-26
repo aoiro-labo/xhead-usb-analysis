@@ -94,7 +94,9 @@ namespace XHeadSender
                 (0x0681, 1), (0x0682, 0), (0x0683, 0),
                 (0x1202, cfg.Frequency),
                 (0x0681, 1), (0x0681, 1), (0x0682, 0), (0x0683, 0),
-                (0x0680, 5),
+                (0x0680, 5), // Mode select = ISDB_T (続報19: 0x0680 tracks mModulationParam.Mode's raw
+                             // enum value; this GUI backend is ISDB_T-only, tools/direct_usb's CLI has
+                             // full --mode support for the other verified-safe modes)
                 (0x0690, (uint)cfg.Constellation),
                 (0x0684, cfg.Bandwidth),
                 (0x0691, (uint)cfg.FFT),

@@ -52,6 +52,7 @@ namespace XHeadDirectUsb
             uint? writeData = null;
 
             uint freqKHz = 473000;
+            uint mode = 5;            // ISDB_T (matches the Mode enum raw value, see RunConfigureSequence)
             uint constellation = 1;   // QPSK
             uint bandwidth = 6;
             uint fft = 1;
@@ -60,6 +61,7 @@ namespace XHeadDirectUsb
             uint timeinterleave = 3;
             int dacgain = -10;
             int streamSeconds = 3;
+            bool forceUntestedMode = false;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -71,6 +73,8 @@ namespace XHeadDirectUsb
                 else if (args[i] == "--stop") stopMode = true;
                 else if (args[i] == "--seconds") streamSeconds = Convert.ToInt32(args[++i]);
                 else if (args[i] == "--freq") freqKHz = Convert.ToUInt32(args[++i]);
+                else if (args[i] == "--mode") mode = Convert.ToUInt32(args[++i]);
+                else if (args[i] == "--force-untested-mode") forceUntestedMode = true;
                 else if (args[i] == "--constellation") constellation = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--bandwidth") bandwidth = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--fft") fft = Convert.ToUInt32(args[++i]);
@@ -78,6 +82,33 @@ namespace XHeadDirectUsb
                 else if (args[i] == "--guardinterval") guardinterval = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--timeinterleave") timeinterleave = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--dacgain") dacgain = Convert.ToInt32(args[++i]);
+            }
+
+            if ((configureMode || streamMode) && !forceUntestedMode)
+            {
+                // 0=DVB_T, 2=ATSC, 3=J83B, 5=ISDB_T have all been directly verified against a real
+                // mnservice.exe register capture (docs/protocol/modulation_capabilities.md 続報17/19)
+                // and are known RF-safe. The other Mode values are either confirmed to hang
+                // mnservice.exe's own service even through the vendor's own code path (4=DTMB,
+                // 6=J83C), or were never reached at the hardware level at all because mnservice.exe's
+                // software validation rejected them first (1=J83A, 7=DVB_T2) -- their raw register
+                // behavior is genuinely unknown. Require an explicit opt-in before sending untested
+                // raw values to the modulator hardware.
+                bool[] verifiedSafeModes = new bool[8]; // index = Mode enum raw value
+                verifiedSafeModes[0] = true; // DVB_T
+                verifiedSafeModes[2] = true; // ATSC
+                verifiedSafeModes[3] = true; // J83B
+                verifiedSafeModes[5] = true; // ISDB_T
+                if (mode >= (uint)verifiedSafeModes.Length || !verifiedSafeModes[mode])
+                {
+                    Console.WriteLine($"REFUSING: --mode {mode} has not been verified against a real mnservice.exe " +
+                        "register capture. J83A(1)/DVB_T2(7) were only ever rejected by mnservice.exe's own software " +
+                        "validation before reaching hardware; DTMB(4)/J83C(6) are confirmed to hang mnservice.exe's " +
+                        "service even through the vendor's own code path (docs/protocol/modulation_capabilities.md " +
+                        "続報13). Sending raw register writes for these Modes carries unknown hardware risk. Pass " +
+                        "--force-untested-mode to override if you understand and accept this risk.");
+                    return 1;
+                }
             }
 
             Console.WriteLine("=== XHeadDirectUsb: raw WinUSB register-bus probe (bypasses mnservice.exe) ===");
@@ -99,12 +130,12 @@ namespace XHeadDirectUsb
             {
                 if (streamMode)
                 {
-                    RunConfigureSequence(freqKHz, constellation, bandwidth, fft, coderate, guardinterval, timeinterleave, dacgain);
+                    RunConfigureSequence(mode, freqKHz, constellation, bandwidth, fft, coderate, guardinterval, timeinterleave, dacgain);
                     RunStreamTest(streamSeconds);
                 }
                 else if (configureMode)
                 {
-                    RunConfigureSequence(freqKHz, constellation, bandwidth, fft, coderate, guardinterval, timeinterleave, dacgain);
+                    RunConfigureSequence(mode, freqKHz, constellation, bandwidth, fft, coderate, guardinterval, timeinterleave, dacgain);
                 }
                 else if (stopMode)
                 {
@@ -211,20 +242,38 @@ namespace XHeadDirectUsb
         /// and tools/usb_capture/README.md) -- these are replayed with the exact constant values observed
         /// in every capture, on the theory that fidelity to the real sequence is the safest way to trigger
         /// whatever latch/state-machine behavior they gate, even without understanding them individually.
+        ///
+        /// 2026-07-27 (続報19): 0x0680 was previously sent as a hardcoded constant (5) with an
+        /// "unidentified" label. Capturing ATSC's and J83B's own native ChannelStart sequences
+        /// (docs/protocol/modulation_capabilities.md 続報19) showed 0x0680 tracking mModulationParam's
+        /// Mode enum raw value exactly across all four modes captured so far (ISDB_T=5, DVB_T=0,
+        /// ATSC=2, J83B=3) -- this is very likely the actual hardware Mode-select register. It is now
+        /// a real parameter (`mode`) instead of a hardcoded constant. The same captures also showed
+        /// ATSC/J83B write ONLY the Constellation register (0x0690) -- no Bandwidth/FFT/CodeRate/
+        /// GuardInterval writes at all, since those Modes have no such fields -- and that DVB_T,
+        /// unlike ISDB_T, has no TimeInterleavce field either. The field set written is now mode-aware
+        /// to match native behavior exactly, rather than always sending the full ISDB_T-shaped set.
         /// </summary>
-        private static void RunConfigureSequence(uint freqKHz, uint constellation, uint bandwidth, uint fft,
+        private static void RunConfigureSequence(uint mode, uint freqKHz, uint constellation, uint bandwidth, uint fft,
             uint coderate, uint guardinterval, uint timeinterleave, int dacgain)
         {
             byte dacByte = unchecked((byte)dacgain);
             uint dacPacked = (uint)((dacByte << 8) | dacByte);
             uint extReg = 0x45585400u | 0x02; // observed as constant 0x45585402 in every capture; meaning unknown
 
-            Console.WriteLine("  Frequency=" + freqKHz + "kHz Constellation=" + constellation + " Bandwidth=" + bandwidth +
-                " FFT=" + fft + " CodeRate=" + coderate + " GuardInterval=" + guardinterval +
-                " TimeInterleavce=" + timeinterleave + " DACGain=" + dacgain);
+            // Confirmed (続報19) field sets per Mode: ISDB_T alone has TimeInterleavce; DVB_T shares
+            // the other four OFDM fields with ISDB_T; ATSC/J83B write Constellation only.
+            bool hasOfdmFields = mode == 0 || mode == 5;   // DVB_T, ISDB_T
+            bool hasTimeInterleave = mode == 5;             // ISDB_T only
+
+            Console.WriteLine("  Mode=" + mode + " Frequency=" + freqKHz + "kHz Constellation=" + constellation +
+                (hasOfdmFields ? " Bandwidth=" + bandwidth + " FFT=" + fft + " CodeRate=" + coderate +
+                    " GuardInterval=" + guardinterval : "") +
+                (hasTimeInterleave ? " TimeInterleavce=" + timeinterleave : "") +
+                " DACGain=" + dacgain);
             Console.Out.Flush();
 
-            var seq = new (ushort addr, uint data, string label)[]
+            var seq = new System.Collections.Generic.List<(ushort addr, uint data, string label)>
             {
                 (0x0602, 1,          "unidentified (observed constant)"),
                 (0x0640, 3,          "unidentified (observed constant)"),
@@ -241,22 +290,28 @@ namespace XHeadDirectUsb
                 (0x0681, 1,          "unidentified (repeat, as observed)"),
                 (0x0682, 0,          "unidentified (repeat, as observed)"),
                 (0x0683, 0,          "unidentified (repeat, as observed)"),
-                (0x0680, 5,          "unidentified (observed constant)"),
+                (0x0680, mode,       "Mode select (続報19)"),
                 (0x0690, constellation, "Constellation"),
-                (0x0684, bandwidth,     "Bandwidth"),
-                (0x0691, fft,           "FFT"),
-                (0x0693, coderate,      "CodeRate"),
-                (0x0692, guardinterval, "GuardInterval"),
-                (0x0694, timeinterleave,"TimeInterleavce"),
-                (0x0600, 1,          "unidentified (transitional state?)"),
-                (0x1228, 0,          "RF power bank, always 0"),
-                (0x1229, dacPacked,  "DACGain"),
-                (0x1221, 2,          "RF power bank, hardcoded literal 2"),
-                (0x1290, extReg,     "EXT-tagged register, meaning unknown"),
-                (0x1220, 0x78122901, "commit/strobe trigger (LSB=1)"),
-                (0x0629, 0,          "unidentified (post-commit)"),
-                (0x0629, 0,          "unidentified (post-commit, repeat)"),
             };
+            if (hasOfdmFields)
+            {
+                seq.Add((0x0684, bandwidth,     "Bandwidth"));
+                seq.Add((0x0691, fft,           "FFT"));
+                seq.Add((0x0693, coderate,      "CodeRate"));
+                seq.Add((0x0692, guardinterval, "GuardInterval"));
+            }
+            if (hasTimeInterleave)
+            {
+                seq.Add((0x0694, timeinterleave, "TimeInterleavce"));
+            }
+            seq.Add((0x0600, 1,          "unidentified (transitional state?)"));
+            seq.Add((0x1228, 0,          "RF power bank, always 0"));
+            seq.Add((0x1229, dacPacked,  "DACGain"));
+            seq.Add((0x1221, 2,          "RF power bank, hardcoded literal 2"));
+            seq.Add((0x1290, extReg,     "EXT-tagged register, meaning unknown"));
+            seq.Add((0x1220, 0x78122901, "commit/strobe trigger (LSB=1)"));
+            seq.Add((0x0629, 0,          "unidentified (post-commit)"));
+            seq.Add((0x0629, 0,          "unidentified (post-commit, repeat)"));
 
             foreach (var (addr, data, label) in seq)
             {

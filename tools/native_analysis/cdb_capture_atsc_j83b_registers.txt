@@ -1,0 +1,4 @@
+.logopen /t C:\Users\aoiro\cdb_atsc_j83b_capture.log
+bu mnservice+0x88500 "r r8; r r9; g"
+bu mnservice+0x883b0 "r r8; r r9; g"
+g
