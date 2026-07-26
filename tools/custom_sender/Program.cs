@@ -268,6 +268,10 @@ namespace XHeadSender
                             {
                                 RunColorbarTest(client, msClient, firstModulationOutputHandle, watcher);
                             }
+                            else if (args.Contains("--dvbt"))
+                            {
+                                RunModeSwitchTest(client, msClient, firstModulationOutputHandle, watcher);
+                            }
                             else if (args.Contains("--sourceurl"))
                             {
                                 int urlIdx = Array.IndexOf(args, "--sourceurl");
@@ -1020,6 +1024,129 @@ namespace XHeadSender
             var sourceStopReq = new msRequest { Cmd = msServiceCmd.CmdSourceStop, ClientID = clientId, HandleID = src.HandleID };
             client.sendRequest(sourceStopReq, deadline: DateTime.UtcNow.AddSeconds(5));
             CloseSource(client, clientId, src.HandleID);
+            CloseChannel(client, clientId, chHandle);
+        }
+
+        /// <summary>
+        /// 2026-07-26: retest of the non-ISDB_T Mode switch (see docs/protocol/modulation_capabilities.md
+        /// "続報6"). The first attempt failed cleanly with "property[mModulationParam] field
+        /// [Constellation] not exists" -- but that attempt only MUTATED Mode in place and APPENDED
+        /// DVB_T's own fields (FieldID 5-9) to the echoed property list, leaving ISDB_T's own
+        /// fields (FieldID 19-24) -- which include a field ALSO named "Constellation" (FieldID=19)
+        /// -- still present in the same flat Values list. Two different fields sharing a display
+        /// name, both present at once, is a plausible explanation for a name-based validator
+        /// picking the wrong one and reporting it as "not exists" for the now-active Mode context.
+        /// This attempt instead REMOVES the old mode's fields before adding the new mode's, testing
+        /// whether that alone (not a genuine firmware limitation) was the real cause of the earlier
+        /// rejection. Same early-ChannelStart-before-any-Source shape as the baseline "echo
+        /// unchanged" case that's already proven to reach real hardware register writes.
+        /// </summary>
+        private static void RunModeSwitchTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher)
+        {
+            uint clientId = msClient.HandleID;
+            Console.WriteLine();
+            Console.WriteLine("=== Mode switch test: ISDB_T -> DVB_T (retry with old-mode fields removed) ===");
+            Console.Out.Flush();
+
+            var openReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdChannelOpen,
+                ClientID = clientId,
+                HandleID = outputHandle,
+                Channel = new msChannelParam { Name = "XHeadSenderModeSwitch" }
+            };
+            var openResp = client.sendRequest(openReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ChannelOpen: Result={openResp.Result} ParamCase={openResp.ParamCase}" +
+                (openResp.HasErrMessage ? $" ErrMessage={openResp.ErrMessage}" : ""));
+            Console.Out.Flush();
+            if (openResp.ParamCase != msResponse.ParamOneofCase.Channel) return;
+            uint chHandle = openResp.Channel.HandleID;
+
+            var addReq = new msRequest { Cmd = msServiceCmd.CmdProgramAdd, ClientID = clientId, HandleID = chHandle };
+            var addResp = client.sendRequest(addReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramAdd: Result={addResp.Result} ParamCase={addResp.ParamCase}" +
+                (addResp.HasErrMessage ? $" ErrMessage={addResp.ErrMessage}" : ""));
+            Console.Out.Flush();
+            if (addResp.ParamCase != msResponse.ParamOneofCase.Program)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            int programIndex = addResp.Program.Index;
+
+            var commitReq = new msRequest { Cmd = msServiceCmd.CmdProgramCommit, ClientID = clientId, HandleID = chHandle, Index = programIndex };
+            foreach (var prop in addResp.Program.Properties)
+            {
+                commitReq.Properties.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+            var commitResp = client.sendRequest(commitReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramCommit: Result={commitResp.Result}" +
+                (commitResp.HasErrMessage ? $" ErrMessage={commitResp.ErrMessage}" : ""));
+            Console.Out.Flush();
+            if (commitResp.Result != msResult.ResultSuccess)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+
+            var channelStartProps = new List<msPropertyParam>();
+            foreach (var prop in openResp.Channel.Properties)
+            {
+                channelStartProps.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+
+            // ISDB_T's own sub-fields (FieldID 19=Constellation, 20=Bandwidth, 21=FFT,
+            // 22=CodeRate, 23=GuardInterval, 24=TimeInterleavce) -- remove BEFORE adding DVB_T's,
+            // so the flat Values list never contains two same-named "Constellation"/"Bandwidth"/
+            // "FFT"/"CodeRate"/"GuardInterval" entries (FieldID 19-23) at once.
+            var modParam = channelStartProps.First(p => p.Name == "mModulationParam");
+            uint[] isdbTFieldIds = { 19, 20, 21, 22, 23, 24 };
+            int removed = modParam.Values.Count;
+            var kept = modParam.Values.Where(v => !isdbTFieldIds.Contains(v.FieldID)).ToList();
+            removed -= kept.Count;
+            modParam.Values.Clear();
+            modParam.Values.AddRange(kept);
+            Console.WriteLine($"  Removed {removed} stale ISDB_T-mode field(s) from mModulationParam before switching Mode.");
+
+            SetPropertyValue(channelStartProps, "mModulationParam", 42, v => v.IntVal = 0); // Mode=DVB_T
+            AddPropertyValue(channelStartProps, "mModulationParam", new msVariant { Type = msVariantType.VariantInt, FieldID = 5, IntVal = 4 });   // Constellation=QAM64 (default)
+            AddPropertyValue(channelStartProps, "mModulationParam", new msVariant { Type = msVariantType.VariantUint, FieldID = 6, UintVal = 6 }); // Bandwidth=6MHz (default)
+            AddPropertyValue(channelStartProps, "mModulationParam", new msVariant { Type = msVariantType.VariantInt, FieldID = 7, IntVal = 1 });   // FFT=_8k (default)
+            AddPropertyValue(channelStartProps, "mModulationParam", new msVariant { Type = msVariantType.VariantInt, FieldID = 8, IntVal = 3 });   // CodeRate=CR_5_6 (default)
+            AddPropertyValue(channelStartProps, "mModulationParam", new msVariant { Type = msVariantType.VariantInt, FieldID = 9, IntVal = 1 });   // GuardInterval=GI_1_16 (default)
+            Console.WriteLine("  mModulationParam.Mode=DVB_T(0), Constellation=QAM64(4), Bandwidth=6, FFT=_8k(1), CodeRate=CR_5_6(3), GuardInterval=GI_1_16(1)");
+            Console.Out.Flush();
+
+            var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
+            startReq.Properties.AddRange(channelStartProps);
+            msResponse startResp;
+            try
+            {
+                Console.WriteLine("  Calling CmdChannelStart EARLY (before any Source exists) with Mode=DVB_T...");
+                Console.Out.Flush();
+                startResp = client.sendRequest(startReq, deadline: DateTime.UtcNow.AddSeconds(10));
+                Console.WriteLine($"  ChannelStart(DVB_T): Result={startResp.Result} Status={startResp.Status} ParamCase={startResp.ParamCase}" +
+                    (startResp.HasErrMessage ? $" ErrMessage={startResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  ChannelStart(DVB_T) RPC error: {ex.Status}");
+                startResp = null;
+            }
+            Console.Out.Flush();
+
+            if (startResp != null && startResp.Result == msResult.ResultSuccess)
+            {
+                Console.WriteLine("  *** ChannelStart(DVB_T) SUCCEEDED -- property validation accepted the new Mode. " +
+                    "Check RTL-SDR now. Holding 8s... ***");
+                Console.Out.Flush();
+                Thread.Sleep(8000);
+
+                var stopReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };
+                var stopResp = client.sendRequest(stopReq, deadline: DateTime.UtcNow.AddSeconds(5));
+                Console.WriteLine($"  ChannelStop: Result={stopResp.Result}");
+            }
+
             CloseChannel(client, clientId, chHandle);
         }
 

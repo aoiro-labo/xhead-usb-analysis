@@ -79,6 +79,13 @@ analyzeHeadless.bat <projectDir> <projectName> -process mnservice.exe -noanalysi
   `mazo::mrevolution::mMTSBMLFile`という実在のネイティブクラスがBMLファイル処理を担って
   いることを確認できた（「続報11」）。cdbで`FUN_1400a56f0`に`bu ... "da rcx; g"`を張り、
   渡された文字列を直接ダンプして「正しいパスで呼ばれているか」を確認する手法と併用した。
+- `XHeadFindEpgCoordinator.java` / `XHeadFindEpgHandler.java` — EPG関連の実在クラス
+  （`strings`で発見した`mazo::mbroadcast::mEPGTable`/`mazo::mrevolution::mEPGSchedule`/
+  `METSITableEIT`等）を関数名・文字列参照の両面から探索したが、**いずれも空振り**に終わった
+  （デコンパイル済み関数名にRTTI由来のクラス名が伝播しておらず名前一致0件、
+  `"mepg_simple.cc"`文字列も参照元関数0件）。EIT複数番組注入の静的解析は現状ここで
+  行き詰まっている——記録として残す（他のBML/RFキャリブレーション探索と同様、空振りも
+  再現性のある事実として残す方針）。
 
 ## cdbでの動的解析（ライブブレークポイント）
 

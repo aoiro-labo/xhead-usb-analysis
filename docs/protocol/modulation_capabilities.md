@@ -20,10 +20,13 @@ XHEAD-USBの出力オブジェクト: `ObjectType=ObjectOutputModulation`, `Path
 
 ### `Mode` が持つ8つの選択肢と、それぞれのサブ構造体
 
-`FieldConstSelect` という型名の通り、実運用でこの値を変更できるかは未検証（ファームウェア/
-アナログRFフロントエンドの対応範囲による可能性が高い。**下記はあくまで変調チップ/ファーム
-ウェアが「知っている」構造であって、XHEAD-USBのアンテナ回路や認証がISDB-T以外の規格の
-送出を安全・合法に行える保証は一切ない**。詳細は本ファイル末尾の注意事項を参照）。
+`FieldConstSelect` という型名の通りタグ付きユニオン構造。**`DVB_T`への切替は`ChannelStart`
+まで完走しRF出力（470〜476MHz帯に+37〜39dB、ISDB_Tモードと同水準）も実測済み**——詳細は
+「続報12」参照。他7規格（J83A/ATSC/J83B/DTMB/J83C/DVB_T2、および`ISDB_T`自身以外）は
+未実施だが、DVB_Tと同じ「旧モードの固有フィールドを削除してから新モードの固有フィールドを
+追加する」パターンで恐らく同様に通ると推測される（未確認）。**下記はあくまで変調チップ/
+ファームウェアが「知っている」構造であって、XHEAD-USBのアンテナ回路や認証がISDB-T以外の
+規格の送出を安全・合法に行える保証は一切ない**。詳細は本ファイル末尾の注意事項を参照。
 
 | Mode | 主なフィールド |
 |---|---|
@@ -441,6 +444,9 @@ ChannelStart(early): Result=ResultFailStatus Status=StatusOffline ParamCase=ErrM
 `FieldConstSelect`型の正しいワイヤ表現を静的に調べる必要があり、少なくとも
 **現状ではISDB-T以外への切替は実証できていない**、というのが正直な到達点。
 
+**【2026-07-26追記】この結論は誤りだった——続報12で覆っている。** 後者（送信フォーマットの
+問題）が正解で、Mode切替自体は実際に成功する。詳細は下記「続報12」を参照。
+
 ```
 # xhead_studio.exe を終了した状態で、mnservice.exe を単体起動
 cd "C:\Program Files\Micomsoft\XHEAD-STUDIO\service"
@@ -726,6 +732,83 @@ mPSRFPowerAdjust/mEPGSimpleParam）の中に、より高機能な「Advanced EPG
 （Event Information Table）セクションを直接注入するような別経路が`mnservice.exe`内部に
 存在するかどうかは未調査（BMLFileと同様の「別経路」がある可能性はゼロではないが、
 現時点では推測の域を出ない）。
+
+### 続報12 (2026-07-26): 【訂正】ISDB-T以外のMode切替は成功する——続報6の失敗は送信フォーマットのバグだった
+
+続報6の「field [Constellation] not exists」拒否について、静的解析で判明した`msVariant`の
+ワイヤ表現（`IsSubGroup=True`なフィールドの子は専用のネスト型を持たず、フラットな
+`Values`リストに兄弟エントリとして並ぶ——これは`DacCtrl`の`IFMode`/`IFFreq`/`GAIN`で
+既に確認済みのパターン）を踏まえ、続報6の失敗原因を再検証した。
+
+**仮説**: 続報6の実装は`Mode`フィールドの値だけを書き換え、DVB_T固有フィールド
+（FieldID 5=Constellation, 6=Bandwidth, 7=FFT, 8=CodeRate, 9=GuardInterval）を
+フラットな`Values`リストに**追加**しただけで、`ChannelOpen`が最初にエコーしてきた
+ISDB_T固有フィールド（FieldID 19=Constellation, 20=Bandwidth, 21=FFT, 22=CodeRate,
+23=GuardInterval, 24=TimeInterleavce）を**一切削除していなかった**。ISDB_Tの
+FieldID=19とDVB_TのFieldID=5は、どちらも表示名が同じ`"Constellation"`——同じ`Values`
+リストの中に同名フィールドが2つ（異なるFieldIDで）同時に存在する状態になっており、
+サーバー側の検証がこれを取り違えた可能性が高いと推測した。
+
+**ライブテスト（事実、ユーザー承認の上で実施）**: `tools/custom_sender`に
+`RunModeSwitchTest`（`--dvbt`フラグ）を新設し、`channelStartProps`から
+`mModulationParam`のISDB_T固有フィールド（FieldID 19〜24、計6個）を**明示的に削除して
+から**`Mode=DVB_T(0)`に切り替え、DVB_T固有フィールドを既定値
+（Constellation=QAM64(4), Bandwidth=6, FFT=_8k(1), CodeRate=CR_5_6(3),
+GuardInterval=GI_1_16(1)）で追加。Source構築前の早期`CmdChannelStart`（`mPSRFPowerAdjust`
+等は`ChannelOpen`の既定値のまま、意図的に未変更）で実行した結果:
+
+```
+Removed 6 stale ISDB_T-mode field(s) from mModulationParam before switching Mode.
+mModulationParam.Mode=DVB_T(0), Constellation=QAM64(4), Bandwidth=6, FFT=_8k(1), CodeRate=CR_5_6(3), GuardInterval=GI_1_16(1)
+ChannelStart(DVB_T): Result=ResultSuccess Status=StatusPrepare ParamCase=None
+```
+
+**仮説通り、Mode=DVB_Tへの切替がサーバー側検証を通過した**——続報6の失敗はハードウェア/
+ファームウェアの制約ではなく、単に本ツール側の送信フォーマットの不備（削除漏れ）だった
+ことが確定した。
+
+**RTL-SDRでのRF実測（事実）**: `ChannelStart(DVB_T)`成功直後、`rtl_power`で465〜481MHzを
+1秒積分・2回連続スキャンし、既存の`rtlsdr_baseline.csv`と比較した
+（[tools/rtlsdr_analysis](../../tools/rtlsdr_analysis)に
+`rtlsdr_dvbt_scan1.csv`/`rtlsdr_dvbt_scan2.csv`として保存済み）。
+
+| 周波数 | 1回目 delta | 2回目 delta |
+|---|---|---|
+| 471.21MHz | +37.56dB | +38.24dB |
+| 472.10MHz | +37.55dB | 同帯域で+37dB台 |
+| 474.31MHz | +37.91dB | 同帯域で+37dB台 |
+
+470〜476MHz帯全体（ISDB-Tの6MHz帯域幅・設定周波数473MHzと一致する範囲）にわたって
++37〜39dBの明確なプラトーが確認でき、2回のスキャンで概ね±1dB以内の再現性があった。
+数値の大きさ・帯域形状は、これまでのISDB_TモードでのRF確認（+33〜39dB、続報5/7/8/10）と
+ほぼ同水準。**`mPSRFPowerAdjust`（Level/PAGain/DACGain）を一切調整していない
+（`ChannelOpen`の既定値0/0/0のまま）にもかかわらず**この出力が得られた点は事実として
+特筆に値する（続報5で「Level=30単体では無効、PAGain/DACGainとセットで初めて効く」と
+分かっていたはずが、ここではLevel=0のままでも強い出力が出た——RF電力調整とMode/変調方式の
+初期化が独立した経路である可能性を示唆する。未確定、推測）。
+
+テスト後、`mnservice.exe`は同一PID・同一起動時刻のまま生存し続け、`Get-PnpDevice`でも
+デバイスは`Status=OK`のまま——クラッシュや異常なし。
+
+**結論と限界（事実+推測を明記）**:
+- **事実**: `mModulationParam.Mode`をISDB_T以外（少なくともDVB_T）に切り替える
+  プロトコル操作は、正しい送信フォーマット（旧モードの固有フィールドを削除してから
+  新モードの固有フィールドを追加）であれば実際に成功し、`ChannelStart`まで完走する。
+- **事実**: その状態で、ISDB_Tモードと同水準（+37〜39dB）の明確なRF出力が470〜476MHz帯に
+  観測された。
+- **未確認（ビットレベル）**: 出力されている信号が規格に準拠した正しいDVB-T OFDM
+  フレーム（有効なパイロット・TPS・FFTサイズ設定等）を含んでいるかは未検証——これまでの
+  ISDB_Tモードのテストと同じ限界。フルOFDM復調、または市販DVB-Tチューナーでの直接受信が
+  必要。
+- **未確認**: J83A/ATSC/J83B/DTMB/J83C/DVB_T2の他モードも同様に成功するか（DVB_Tのみで
+  確認、他は同じ「旧フィールド削除→新フィールド追加」パターンを適用すれば恐らく同様に
+  通ると推測されるが未実施）。
+- **重要な注意（再掲・強調）**: XHEAD-USBはISDB-T（UHF帯）専用機として設計・
+  （おそらく）認証された製品。ここで確認したのは「プロトコル層でMode切替が受理され、
+  RFフロントエンドから何らかの強い出力が出ること」までであり、それが電波法上適法な
+  範囲の信号であることは一切意味しない。本検証は同軸ループバック(RTL-SDR)に限定して
+  おり、アンテナ接続での送出は行っていない。実運用（アンテナ接続）での非ISDB-Tモード
+  送出は行わないこと。
 
 ## 重要な注意事項
 
