@@ -18,6 +18,7 @@
     <AssemblyName>XHeadSender</AssemblyName>
     <LangVersion>10.0</LangVersion>
     <Nullable>disable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
   <PropertyGroup>

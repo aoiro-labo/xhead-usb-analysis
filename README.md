@@ -76,14 +76,23 @@ decompiled/            公式アプリのデコンパイル結果（著作権上
 
 ## 独自送出ツール (tools/custom_sender)
 
-C#製。公式インストール済みの `mnClientDotNet.dll` を参照して `mnservice.exe` (localhost:50051) に直接 gRPC接続する。**vendor DLLはリポジトリに含めず**、ローカルの `C:\Program Files\Micomsoft\XHEAD-STUDIO` を参照する前提。
+C#製。公式インストール済みの `mnClientDotNet.dll` を参照して `mnservice.exe` (localhost:50051) に直接 gRPC接続する。**vendor DLLはリポジトリに含めず**、ローカルの `C:\Program Files\Micomsoft\XHEAD-STUDIO` を参照する前提。CLIとGUIの両方を同じ実行ファイルで提供する。
 
 ```
 cd tools/custom_sender
 dotnet build
 # XHEAD-STUDIO (xhead_studio.exe) を一度起動してサービスを立ち上げた状態で:
-dotnet run
+dotnet run                              # CLI: 疎通確認・プロパティツリーダンプ・フルパイプラインテスト
+dotnet bin/Debug/net472/XHeadSender.exe --gui   # GUI: 変調パラメータ+RF電力を自由に設定して送出/停止
 ```
+
+GUI（`MainForm.cs`）は接続→変調パラメータ設定→`ChannelStart`による送出→停止→切断、という
+最小限の操作に絞っている（Source/Capture/エンコーダは構築しない）。周波数・Constellation・
+Bandwidth・FFT・CodeRate・GuardInterval・TimeInterleavce・RF電力(Level/PAGain/DACGain)を
+画面上の入力欄から自由に設定でき、`ChannelStart`単体で変調器を実際にRF駆動できる
+（[tools/direct_usb](tools/direct_usb)の`--configure`と同じ考え方を、こちらは公式サービス
+経由・プロパティ検証つきで行う版）。映像/音声の実ストリーム送出が必要な場合は引き続き
+CLI（引数なしの`dotnet run`）の`RunFullPipelineTest`を使うこと。
 
 ## 免責・注意事項
 

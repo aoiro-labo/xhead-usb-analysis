@@ -105,17 +105,20 @@ namespace XHeadSender
 
     internal static class Program
     {
-        private const string ServiceAddress = "localhost:50051";
+        internal const string ServiceAddress = "localhost:50051";
 
+        [STAThread]
         private static int Main(string[] args)
         {
-            // Grpc.Core (legacy grpc-csharp) はネイティブ拡張 grpc_csharp_ext.x64/x86.dll を
-            // P/Invoke でロードする。当該DLLは自前配布せず、既存の XHEAD-STUDIO インストールの
-            // ものをそのまま使うため、検索パスに追加しておく。
-            string xheadDir = Environment.GetEnvironmentVariable("XHEAD_STUDIO_DIR")
-                               ?? @"C:\Program Files\Micomsoft\XHEAD-STUDIO";
-            string path = Environment.GetEnvironmentVariable("PATH") ?? "";
-            Environment.SetEnvironmentVariable("PATH", xheadDir + ";" + path);
+            if (args.Contains("--gui"))
+            {
+                System.Windows.Forms.Application.EnableVisualStyles();
+                System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
+                System.Windows.Forms.Application.Run(new MainForm());
+                return 0;
+            }
+
+            EnsureNativeDllPathConfigured();
 
             Console.WriteLine($"[XHeadSender] connecting to {ServiceAddress} ...");
 
@@ -854,12 +857,28 @@ namespace XHeadSender
         }
 
         /// <summary>
+        /// Grpc.Core (legacy grpc-csharp) はネイティブ拡張 grpc_csharp_ext.x64/x86.dll を
+        /// P/Invoke でロードする。当該DLLは自前配布せず、既存の XHEAD-STUDIO インストールの
+        /// ものをそのまま使うため、検索パスに追加しておく。CLI・GUI 両方の接続経路から呼ぶ。
+        /// </summary>
+        internal static void EnsureNativeDllPathConfigured()
+        {
+            string xheadDir = Environment.GetEnvironmentVariable("XHEAD_STUDIO_DIR")
+                               ?? @"C:\Program Files\Micomsoft\XHEAD-STUDIO";
+            string path = Environment.GetEnvironmentVariable("PATH") ?? "";
+            if (!path.Contains(xheadDir))
+            {
+                Environment.SetEnvironmentVariable("PATH", xheadDir + ";" + path);
+            }
+        }
+
+        /// <summary>
         /// Mutates a single msVariant (by group name + FieldID) in place within an
         /// echoed-back property list, leaving every other field untouched. Throws if the
         /// group/field isn't present -- callers should only target fields confirmed to exist via
         /// a live property dump first.
         /// </summary>
-        private static void SetPropertyValue(List<msPropertyParam> props, string groupName, uint fieldId, Action<msVariant> setter)
+        internal static void SetPropertyValue(List<msPropertyParam> props, string groupName, uint fieldId, Action<msVariant> setter)
         {
             var group = props.First(p => p.Name == groupName);
             var variant = group.Values.First(v => v.FieldID == fieldId);
