@@ -237,3 +237,21 @@ RF出力の停止を確認できた**（+44dBの明確なプラトーから、�
 変調パラメータ+RF電力設定を送出できる（対応範囲はレジスタで表現できるものに限られ、
 Source添付・チャンネル/番組メタデータは非対応）。本ツール(`XHeadDirectUsb.exe`)自体にも
 `--stop`を追加済み（`RunStopSequence`）——単体で送出開始・停止の両方が完結する。
+
+### 続報2 (2026-07-26): 本ツール単体でDVB_T相当の送出にも成功——ISDB_Tとレジスタを完全共有
+
+`docs/protocol/modulation_capabilities.md`「続報17」の詳細だが、要点だけここにも記録する。
+`--configure`の`--constellation`等の引数は生のレジスタ値をそのまま渡すだけなので、
+`mnservice.exe`経由のDVB_Tモードテスト（続報13）で使ったのと同じ値
+（`--constellation 4`=DVB_TのQAM64生値、他は共通）を渡すだけで、コード変更なしに
+DVB_T相当の設定を送出できた:
+
+```
+XHeadDirectUsb.exe --configure --constellation 4 --bandwidth 6 --fft 1 --coderate 3 \
+    --guardinterval 1 --timeinterleave 3 --dacgain -10
+```
+
+RTL-SDRで473.6MHz付近に+37.7dBの明確なRF出力を実測、`--stop`で停止も確認済み。
+`mnservice.exe`を一切経由しない非ISDB-Tモード送出の最初の実証例——本プロジェクトの
+「mnservice.exe完全非依存の送出」（続報7・15）と「非ISDB-Tモードへの切替」（続報12・13）が
+初めて同時に成り立った。ビットレベルでの規格準拠は他の全RFテストと同じく未検証。

@@ -1045,6 +1045,49 @@ WinFormsの自動排他選択（同じ直接の親コンテナ内でのみ機能
 残るバグがあった。コンテナ構成に関わらず確実に排他制御するよう、明示的な
 `CheckedChanged`ハンドラで対応した。
 
+### 続報17 (2026-07-26): DVB_T相当の送出を`mnservice.exe`完全非依存で実証——続報12（Mode切替成功）と続報7・15（mnservice.exe非依存送出）の合流点
+
+続報15の末尾でcdbによりDVB_Tモードのレジスタ書き込みを捕捉した際、**ISDB_Tと全く同じ
+レジスタアドレス**（`0x0690`=Constellation・`0x0684`=Bandwidth・`0x0691`=FFT・
+`0x0693`=CodeRate・`0x0692`=GuardInterval）が使われており、別途の「モード選択」レジスタは
+観測範囲内に見当たらなかった。さらにフィールドのenum値そのものを比較すると、
+FFT・CodeRate・GuardIntervalは**ISDB_TとDVB_Tで数値エンコーディングが完全に同一**
+（例: FFTは両モードとも`1=_8k, 2=_4k, 0=_2k`という非単調な順序まで一致）で、唯一
+Constellationだけが異なる（ISDB_T: `0=DQPSK,1=QPSK,2=QAM16,3=QAM64`、DVB_T:
+`0=QPSK,2=QAM16,4=QAM64`）。
+
+この一致から、「`Mode`の切替とは、チップ側の別レジスタバンクを使うことではなく、
+ソフトウェア側（クライアントまたは`mnservice.exe`）がどのenumテーブルで値を解釈するかが
+変わるだけであり、レジスタバス自体は完全に共通」という仮説が立てられた。これが正しければ、
+`tools/direct_usb`が既に実装している`--configure`（ISDB_T用に確立したレジスタ書き込み
+シーケンス）に、**DVB_T側のConstellation生値（QAM64=4）をそのまま渡すだけ**で、
+`mnservice.exe`を一切経由せずDVB_T相当の送出ができるはずである。
+
+**ライブ検証（事実）**: `XHeadDirectUsb.exe --configure --constellation 4 --bandwidth 6
+--fft 1 --coderate 3 --guardinterval 1 --timeinterleave 3 --dacgain -10`
+（続報13でmnservice.exe経由のDVB_Tモードテストに使ったのと全く同じ値の組み合わせ、
+Constellationだけ`4`=DVB_TのQAM64生値）を実行したところ、全29回の書き込みがエラーなく
+完了し、`0x0690`の読み戻しも`4`で一致した。直後にRTL-SDRでスキャンしたところ、
+**473.6MHz付近に+37.7dBの明確なRF出力を実測**——これまでのISDB_T・DVB_T(mnservice.exe経由)
+両方の実測値と同水準だった。続けて新設した`--stop`（続報15参照）を送信し、再スキャンでは
++7〜10dB程度（ノイズフロア相当）まで低下したことも確認した（実測データ:
+`tools/rtlsdr_analysis/rtlsdr_dvbt_direct_scan1/2.csv`・`rtlsdr_dvbt_direct_afterstop.csv`）。
+実機は`Get-PnpDevice`で終始`Status=OK`のまま。
+
+**結論（事実+推測を明記）**: **事実**として、`mnservice.exe`を一切起動していない状態で、
+`tools/direct_usb`（生のレジスタバス書き込みのみ）を使い、DVB_T相当の変調設定・RF出力・
+停止までの一連の操作が完結することを実証した——本プロジェクトの2つの主要な成果
+（続報7・15の「mnservice.exe完全非依存の送出」と続報12・13の「非ISDB-Tモードへの切替」）が
+初めて同時に成り立つことを示せた。ユーザーが以前「EIT注入とかISDB-T以外での配信ができたら
+革命レベル」と述べていた後者の半分（非ISDB-T配信の非公式ツールでの実現）を、
+`mnservice.exe`にも公式GUIにも一切頼らない形で達成したことになる。**推測**として、
+ビットレベルで規格準拠の正しいDVB-T OFDMフレームが出ているかは他の全RFテストと同じく
+未検証（フルOFDM復調または市販DVB-Tチューナーでの受信が必要）。また、この「レジスタバス
+共通・enumだけ違う」仮説が他の6モード（J83A/ATSC/J83B/DTMB/J83C/DVB_T2）にも同様に
+当てはまるかは未確認——特にDTMB/J83Cは続報13でmnservice.exe経由でもハングする本物のバグが
+確認されているため、レジスタレベルで試すこと自体にも追加のリスクがあり得る（未実施、
+慎重な検討が必要）。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に
