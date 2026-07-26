@@ -367,13 +367,23 @@ namespace XHeadDirectUsb
         /// Packets use the standard MPEG-TS "null packet" convention (PID=0x1FFF) so any real ISDB-T
         /// demux downstream would recognize them as stuffing rather than malformed data.
         /// </summary>
+        /// <summary>
+        /// 2026-07-27: interleaves 0x0629 polling (control transfers) with the bulk-OUT TS slice
+        /// writes. 0x0629 was already characterized in three static states (tools/usb_capture/
+        /// README.md 続報9): idle=439(0x1B7), configured-but-no-TS=0, streaming=observed varying
+        /// 7-472. This logs a time series during an actual --stream run from this tool, to see
+        /// whether the value's behavior over time looks like a ring-buffer occupancy gauge
+        /// (bounded, fluctuating around some steady-state) versus something else (monotonic growth
+        /// suggesting overflow, a fixed constant unrelated to the data volume, etc.).
+        /// </summary>
         private static void RunStreamTest(int seconds)
         {
-            Console.WriteLine($"  Streaming synthetic null-TS slices over bulk OUT (pipe 0x{PIPE_ID_BULK_OUT:X2}) for {seconds}s...");
+            Console.WriteLine($"  Streaming synthetic null-TS slices over bulk OUT (pipe 0x{PIPE_ID_BULK_OUT:X2}) for {seconds}s, polling 0x0629 concurrently...");
             Console.Out.Flush();
 
             byte[] slice = BuildNullTsSlice();
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            var pollSw = System.Diagnostics.Stopwatch.StartNew();
             long slicesSent = 0;
             long bytesSent = 0;
 
@@ -389,6 +399,20 @@ namespace XHeadDirectUsb
                 }
                 slicesSent++;
                 bytesSent += transferred;
+
+                if (pollSw.Elapsed.TotalMilliseconds >= 200)
+                {
+                    // mnservice.exe's own observed pattern (tools/usb_capture/README.md 続報9) pairs
+                    // a 0x0629=0 WRITE with each read, ~19ms apart -- replicate that pairing here in
+                    // case the write itself is what triggers a fresh sample/latch.
+                    SetAddress(0x0629);
+                    WriteRegister(0);
+                    SetAddress(0x0629);
+                    var (echoAddr, data) = ReadRegister();
+                    Console.WriteLine($"  t={sw.Elapsed.TotalSeconds:F2}s slices={slicesSent} bytes={bytesSent} 0x0629={data} (0x{data:X})");
+                    Console.Out.Flush();
+                    pollSw.Restart();
+                }
             }
 
             Console.WriteLine($"  Stream test done: {slicesSent} slices / {bytesSent} bytes sent in {sw.Elapsed.TotalSeconds:F1}s, no pipe errors.");
