@@ -268,9 +268,10 @@ namespace XHeadSender
                             {
                                 RunColorbarTest(client, msClient, firstModulationOutputHandle, watcher);
                             }
-                            else if (args.Contains("--dvbt"))
+                            else if (NonIsdbTModes.Any(m => args.Contains("--" + m.ModeName.ToLowerInvariant().Replace("_", ""))))
                             {
-                                RunModeSwitchTest(client, msClient, firstModulationOutputHandle, watcher);
+                                var spec = NonIsdbTModes.First(m => args.Contains("--" + m.ModeName.ToLowerInvariant().Replace("_", "")));
+                                RunModeSwitchTest(client, msClient, firstModulationOutputHandle, watcher, spec);
                             }
                             else if (args.Contains("--sourceurl"))
                             {
@@ -1028,24 +1029,104 @@ namespace XHeadSender
         }
 
         /// <summary>
-        /// 2026-07-26: retest of the non-ISDB_T Mode switch (see docs/protocol/modulation_capabilities.md
-        /// "続報6"). The first attempt failed cleanly with "property[mModulationParam] field
-        /// [Constellation] not exists" -- but that attempt only MUTATED Mode in place and APPENDED
-        /// DVB_T's own fields (FieldID 5-9) to the echoed property list, leaving ISDB_T's own
-        /// fields (FieldID 19-24) -- which include a field ALSO named "Constellation" (FieldID=19)
-        /// -- still present in the same flat Values list. Two different fields sharing a display
-        /// name, both present at once, is a plausible explanation for a name-based validator
-        /// picking the wrong one and reporting it as "not exists" for the now-active Mode context.
-        /// This attempt instead REMOVES the old mode's fields before adding the new mode's, testing
-        /// whether that alone (not a genuine firmware limitation) was the real cause of the earlier
-        /// rejection. Same early-ChannelStart-before-any-Source shape as the baseline "echo
-        /// unchanged" case that's already proven to reach real hardware register writes.
+        /// Describes one mModulationParam.Mode option's own field set, enough to build a live
+        /// ChannelStart test for it. FieldIDs/defaults transcribed from the live msDescriptor dump
+        /// (see docs/protocol/modulation_capabilities.md "Mode が持つ8つの選択肢").
         /// </summary>
-        private static void RunModeSwitchTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher)
+        private struct ModeSpec
+        {
+            public int ModeValue;
+            public string ModeName;
+            public (uint FieldID, msVariantType Type, int IntVal, uint UintVal)[] Fields;
+        }
+
+        // Every mode-specific FieldID across all 8 Mode options (5-41) -- used to blanket-strip
+        // whichever mode's fields happen to be currently echoed, regardless of which mode is
+        // presently active, before adding the target mode's own fields.
+        private static readonly uint[] AllModeSpecificFieldIds =
+            Enumerable.Range(5, 41 - 5 + 1).Select(i => (uint)i).ToArray();
+
+        private static readonly ModeSpec[] NonIsdbTModes = new[]
+        {
+            new ModeSpec { ModeValue = 0, ModeName = "DVB_T", Fields = new[] {
+                (5u, msVariantType.VariantInt, 4, 0u),   // Constellation=QAM64 (default)
+                (6u, msVariantType.VariantUint, 0, 6u),  // Bandwidth=6MHz (default)
+                (7u, msVariantType.VariantInt, 1, 0u),   // FFT=_8k (default)
+                (8u, msVariantType.VariantInt, 3, 0u),   // CodeRate=CR_5_6 (default)
+                (9u, msVariantType.VariantInt, 1, 0u),   // GuardInterval=GI_1_16 (default)
+            }},
+            new ModeSpec { ModeValue = 1, ModeName = "J83A", Fields = new[] {
+                (10u, msVariantType.VariantInt, 2, 0u),  // Constellation=QAM64 (default)
+            }},
+            new ModeSpec { ModeValue = 2, ModeName = "ATSC", Fields = new[] {
+                (11u, msVariantType.VariantInt, 0, 0u),  // Constellation=_8VSB (default, only option)
+            }},
+            new ModeSpec { ModeValue = 3, ModeName = "J83B", Fields = new[] {
+                (12u, msVariantType.VariantInt, 1, 0u),  // Constellation=QAM64 (default)
+            }},
+            // WARNING (2026-07-26, 続報13): live-tested and confirmed this Mode's ChannelStart
+            // call HANGS mnservice.exe's entire gRPC service (DeadlineExceeded on this call,
+            // then "wait service timeout" Cancelled on every subsequent request from any client,
+            // process itself stays alive/Responding but never recovers without a hard kill).
+            // Confirmed via tools/direct_usb read-only register scan that the underlying USB
+            // hardware stays healthy throughout -- this is purely an mnservice.exe software-side
+            // wedge. Do not run --dtmb without expecting to kill+restart mnservice.exe afterward.
+            new ModeSpec { ModeValue = 4, ModeName = "DTMB", Fields = new[] {
+                (13u, msVariantType.VariantInt, 2, 0u),  // Constellation=QAM64 (default)
+                (14u, msVariantType.VariantUint, 0, 8u), // Bandwidth=8MHz (default)
+                (15u, msVariantType.VariantInt, 2, 0u),  // CodeRate=CR_0_8 (default)
+                (16u, msVariantType.VariantInt, 0, 0u),  // Carrier=CARRIER_3780 (default)
+                (17u, msVariantType.VariantInt, 1, 0u),  // Frame=FRAME_945 (default)
+                (18u, msVariantType.VariantInt, 3, 0u),  // Interleave=TI_720 (default)
+            }},
+            // WARNING (2026-07-26, 続報13): same hang as DTMB above, confirmed on a freshly
+            // restarted mnservice.exe (so not a leftover-session artifact). Single-field mode,
+            // same shape as J83A/ATSC/J83B which all completed cleanly -- field count doesn't
+            // predict this. Do not run --j83c without expecting to kill+restart mnservice.exe.
+            new ModeSpec { ModeValue = 6, ModeName = "J83C", Fields = new[] {
+                (25u, msVariantType.VariantInt, 2, 0u),  // Constellation=QAM64 (default)
+            }},
+            new ModeSpec { ModeValue = 7, ModeName = "DVB_T2", Fields = new[] {
+                (26u, msVariantType.VariantInt, 131072, 0u),  // Version=VERSION_1_2 (default)
+                (27u, msVariantType.VariantUint, 0, 6u),      // Bandwidth=6MHz (default)
+                (28u, msVariantType.VariantUint, 0, 0u),      // Function=none (default)
+                (29u, msVariantType.VariantInt, 2, 0u),       // L1Constellation=QAM16 (default)
+                (30u, msVariantType.VariantInt, 3, 0u),       // PLPConstellation=QAM256 (default)
+                (31u, msVariantType.VariantInt, 3, 0u),       // FFT=_8K (default)
+                (32u, msVariantType.VariantInt, 4, 0u),       // CodeRate=CR_4_5 (default)
+                (33u, msVariantType.VariantInt, 0, 0u),       // GuardInterval=GI_1_32 (default)
+                (34u, msVariantType.VariantInt, 6, 0u),       // PilotPattern=PP_7 (default)
+                (35u, msVariantType.VariantInt, 0, 0u),       // FEC=FEC_16200 (default)
+                (36u, msVariantType.VariantUint, 0, 12421u),  // NetworkID (default)
+                (37u, msVariantType.VariantUint, 0, 32769u),  // SystemID (default)
+                (38u, msVariantType.VariantUint, 0, 0u),      // FECBlockNums (default)
+                (39u, msVariantType.VariantUint, 0, 0u),      // SysmbolNums (default)
+                (40u, msVariantType.VariantUint, 0, 0u),      // TINumber (default)
+                (41u, msVariantType.VariantUint, 0, 0u),      // ISSYLength (default)
+            }},
+        };
+
+        /// <summary>
+        /// 2026-07-26 (続報12): retest of the non-ISDB_T Mode switch (see
+        /// docs/protocol/modulation_capabilities.md "続報6"). The first attempt failed cleanly
+        /// with "property[mModulationParam] field [Constellation] not exists" -- but that attempt
+        /// only MUTATED Mode in place and APPENDED the new mode's own fields to the echoed
+        /// property list, leaving whichever mode was previously active's own fields (e.g. ISDB_T's
+        /// FieldID 19-24, which include a field ALSO named "Constellation" as FieldID=19) still
+        /// present in the same flat Values list. Two different fields sharing a display name, both
+        /// present at once, is a plausible explanation for a name-based validator picking the wrong
+        /// one and reporting it as "not exists" for the now-active Mode context. This attempt
+        /// instead REMOVES every other mode's fields before adding the target mode's -- confirmed
+        /// live for DVB_T (ChannelStart succeeds, RF output matches ISDB_T-mode levels); this
+        /// generalizes the same fix to the remaining 6 modes. Same early-ChannelStart-before-any-
+        /// Source shape as the baseline "echo unchanged" case already proven to reach real hardware
+        /// register writes.
+        /// </summary>
+        private static void RunModeSwitchTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher, ModeSpec spec)
         {
             uint clientId = msClient.HandleID;
             Console.WriteLine();
-            Console.WriteLine("=== Mode switch test: ISDB_T -> DVB_T (retry with old-mode fields removed) ===");
+            Console.WriteLine($"=== Mode switch test: -> {spec.ModeName} (old-mode fields stripped first) ===");
             Console.Out.Flush();
 
             var openReq = new msRequest
@@ -1095,26 +1176,28 @@ namespace XHeadSender
                 channelStartProps.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
             }
 
-            // ISDB_T's own sub-fields (FieldID 19=Constellation, 20=Bandwidth, 21=FFT,
-            // 22=CodeRate, 23=GuardInterval, 24=TimeInterleavce) -- remove BEFORE adding DVB_T's,
-            // so the flat Values list never contains two same-named "Constellation"/"Bandwidth"/
-            // "FFT"/"CodeRate"/"GuardInterval" entries (FieldID 19-23) at once.
+            // Blanket-strip ANY currently-echoed mode-specific field (covers whichever mode is
+            // presently active, not just ISDB_T) before adding the target mode's own fields --
+            // see the method doc comment for why this matters (same-named fields at different
+            // FieldIDs confusing the server's name-based validator).
             var modParam = channelStartProps.First(p => p.Name == "mModulationParam");
-            uint[] isdbTFieldIds = { 19, 20, 21, 22, 23, 24 };
             int removed = modParam.Values.Count;
-            var kept = modParam.Values.Where(v => !isdbTFieldIds.Contains(v.FieldID)).ToList();
+            var kept = modParam.Values.Where(v => !AllModeSpecificFieldIds.Contains(v.FieldID)).ToList();
             removed -= kept.Count;
             modParam.Values.Clear();
             modParam.Values.AddRange(kept);
-            Console.WriteLine($"  Removed {removed} stale ISDB_T-mode field(s) from mModulationParam before switching Mode.");
+            Console.WriteLine($"  Removed {removed} stale mode-specific field(s) from mModulationParam before switching Mode.");
 
-            SetPropertyValue(channelStartProps, "mModulationParam", 42, v => v.IntVal = 0); // Mode=DVB_T
-            AddPropertyValue(channelStartProps, "mModulationParam", new msVariant { Type = msVariantType.VariantInt, FieldID = 5, IntVal = 4 });   // Constellation=QAM64 (default)
-            AddPropertyValue(channelStartProps, "mModulationParam", new msVariant { Type = msVariantType.VariantUint, FieldID = 6, UintVal = 6 }); // Bandwidth=6MHz (default)
-            AddPropertyValue(channelStartProps, "mModulationParam", new msVariant { Type = msVariantType.VariantInt, FieldID = 7, IntVal = 1 });   // FFT=_8k (default)
-            AddPropertyValue(channelStartProps, "mModulationParam", new msVariant { Type = msVariantType.VariantInt, FieldID = 8, IntVal = 3 });   // CodeRate=CR_5_6 (default)
-            AddPropertyValue(channelStartProps, "mModulationParam", new msVariant { Type = msVariantType.VariantInt, FieldID = 9, IntVal = 1 });   // GuardInterval=GI_1_16 (default)
-            Console.WriteLine("  mModulationParam.Mode=DVB_T(0), Constellation=QAM64(4), Bandwidth=6, FFT=_8k(1), CodeRate=CR_5_6(3), GuardInterval=GI_1_16(1)");
+            SetPropertyValue(channelStartProps, "mModulationParam", 42, v => v.IntVal = spec.ModeValue);
+            var fieldSummary = new List<string>();
+            foreach (var f in spec.Fields)
+            {
+                var variant = new msVariant { Type = f.Type, FieldID = f.FieldID };
+                if (f.Type == msVariantType.VariantUint) variant.UintVal = f.UintVal; else variant.IntVal = f.IntVal;
+                AddPropertyValue(channelStartProps, "mModulationParam", variant);
+                fieldSummary.Add($"FieldID={f.FieldID}={(f.Type == msVariantType.VariantUint ? f.UintVal.ToString() : f.IntVal.ToString())}");
+            }
+            Console.WriteLine($"  mModulationParam.Mode={spec.ModeName}({spec.ModeValue}), {string.Join(", ", fieldSummary)}");
             Console.Out.Flush();
 
             var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
@@ -1122,22 +1205,22 @@ namespace XHeadSender
             msResponse startResp;
             try
             {
-                Console.WriteLine("  Calling CmdChannelStart EARLY (before any Source exists) with Mode=DVB_T...");
+                Console.WriteLine($"  Calling CmdChannelStart EARLY (before any Source exists) with Mode={spec.ModeName}...");
                 Console.Out.Flush();
                 startResp = client.sendRequest(startReq, deadline: DateTime.UtcNow.AddSeconds(10));
-                Console.WriteLine($"  ChannelStart(DVB_T): Result={startResp.Result} Status={startResp.Status} ParamCase={startResp.ParamCase}" +
+                Console.WriteLine($"  ChannelStart({spec.ModeName}): Result={startResp.Result} Status={startResp.Status} ParamCase={startResp.ParamCase}" +
                     (startResp.HasErrMessage ? $" ErrMessage={startResp.ErrMessage}" : ""));
             }
             catch (RpcException ex)
             {
-                Console.WriteLine($"  ChannelStart(DVB_T) RPC error: {ex.Status}");
+                Console.WriteLine($"  ChannelStart({spec.ModeName}) RPC error: {ex.Status}");
                 startResp = null;
             }
             Console.Out.Flush();
 
             if (startResp != null && startResp.Result == msResult.ResultSuccess)
             {
-                Console.WriteLine("  *** ChannelStart(DVB_T) SUCCEEDED -- property validation accepted the new Mode. " +
+                Console.WriteLine($"  *** ChannelStart({spec.ModeName}) SUCCEEDED -- property validation accepted the new Mode. " +
                     "Check RTL-SDR now. Holding 8s... ***");
                 Console.Out.Flush();
                 Thread.Sleep(8000);
