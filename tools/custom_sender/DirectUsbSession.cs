@@ -72,6 +72,14 @@ namespace XHeadSender
         /// tools/direct_usb の RunConfigureSequence と全く同じレジスタ書き込み列
         /// (CmdChannelStart時にmnservice.exeが実際に発行する順序、cdbで復元済み)を、
         /// GUIで指定された周波数/変調方式/RF電力で再生する。
+        ///
+        /// 続報19: 0x0680はMode(FieldID=42)のraw enum値をそのまま書き込む「モード選択」レジスタ
+        /// である可能性が高いと判明した(以前はISDB_T固定の定数5をハードコードしていた)。
+        /// あわせてATSC/J83Bは実機ネイティブキャプチャでConstellationしか書き込んでおらず、
+        /// DVB_TはISDB_Tと違いTimeInterleavceを持たないことも確認済み -- cfg.Modeに応じて
+        /// 書き込むフィールド集合をtools/direct_usb/Program.csのRunConfigureSequenceと
+        /// 同じ基準で切り替える。GUIの選択肢はcfg.Modeが実機で安全と確認済みの4値
+        /// (0=DVB_T/2=ATSC/3=J83B/5=ISDB_T)に限定しているため、それ以外の値は想定しない。
         /// </summary>
         public void StartChannel(ModulationConfig cfg)
         {
@@ -82,11 +90,15 @@ namespace XHeadSender
             uint dacPacked = (uint)((dacByte << 8) | dacByte);
             uint extReg = 0x45585400u | 0x02; // 全キャプチャで定数として観測(意味未解明)
 
-            Console.WriteLine($"[DirectUSB] ChannelStart: Frequency={cfg.Frequency}kHz Constellation={cfg.Constellation} " +
-                $"Bandwidth={cfg.Bandwidth} FFT={cfg.FFT} CodeRate={cfg.CodeRate} GuardInterval={cfg.GuardInterval} " +
-                $"TimeInterleavce={cfg.TimeInterleavce} DACGain={cfg.DACGain}");
+            bool hasOfdmFields = cfg.Mode == 0 || cfg.Mode == 5;   // DVB_T, ISDB_T
+            bool hasTimeInterleave = cfg.Mode == 5;                 // ISDB_T のみ
 
-            var seq = new (ushort addr, uint data)[]
+            Console.WriteLine($"[DirectUSB] ChannelStart: Mode={cfg.Mode} Frequency={cfg.Frequency}kHz Constellation={cfg.Constellation}" +
+                (hasOfdmFields ? $" Bandwidth={cfg.Bandwidth} FFT={cfg.FFT} CodeRate={cfg.CodeRate} GuardInterval={cfg.GuardInterval}" : "") +
+                (hasTimeInterleave ? $" TimeInterleavce={cfg.TimeInterleavce}" : "") +
+                $" DACGain={cfg.DACGain}");
+
+            var seq = new System.Collections.Generic.List<(ushort addr, uint data)>
             {
                 (0x0602, 1), (0x0640, 3), (0x0642, 0), (0x0641, 1), (0x0601, 5),
                 (0x1202, cfg.Frequency),
@@ -94,23 +106,28 @@ namespace XHeadSender
                 (0x0681, 1), (0x0682, 0), (0x0683, 0),
                 (0x1202, cfg.Frequency),
                 (0x0681, 1), (0x0681, 1), (0x0682, 0), (0x0683, 0),
-                (0x0680, 5), // Mode select = ISDB_T (続報19: 0x0680 tracks mModulationParam.Mode's raw
-                             // enum value; this GUI backend is ISDB_T-only, tools/direct_usb's CLI has
-                             // full --mode support for the other verified-safe modes)
+                (0x0680, cfg.Mode),
                 (0x0690, (uint)cfg.Constellation),
-                (0x0684, cfg.Bandwidth),
-                (0x0691, (uint)cfg.FFT),
-                (0x0693, (uint)cfg.CodeRate),
-                (0x0692, (uint)cfg.GuardInterval),
-                (0x0694, (uint)cfg.TimeInterleavce),
-                (0x0600, 1),
-                (0x1228, 0),
-                (0x1229, dacPacked),
-                (0x1221, 2),
-                (0x1290, extReg),
-                (0x1220, 0x78122901),
-                (0x0629, 0), (0x0629, 0),
             };
+            if (hasOfdmFields)
+            {
+                seq.Add((0x0684, cfg.Bandwidth));
+                seq.Add((0x0691, (uint)cfg.FFT));
+                seq.Add((0x0693, (uint)cfg.CodeRate));
+                seq.Add((0x0692, (uint)cfg.GuardInterval));
+            }
+            if (hasTimeInterleave)
+            {
+                seq.Add((0x0694, (uint)cfg.TimeInterleavce));
+            }
+            seq.Add((0x0600, 1));
+            seq.Add((0x1228, 0));
+            seq.Add((0x1229, dacPacked));
+            seq.Add((0x1221, 2));
+            seq.Add((0x1290, extReg));
+            seq.Add((0x1220, 0x78122901));
+            seq.Add((0x0629, 0));
+            seq.Add((0x0629, 0));
 
             foreach (var (addr, data) in seq)
             {

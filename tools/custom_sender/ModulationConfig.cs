@@ -9,6 +9,11 @@ namespace XHeadSender
     internal sealed class ModulationConfig
     {
         public uint Frequency = 473000;      // FieldID=0, kHz, 宣言上0-1,000,000
+        // Mode(FieldID=42)。GuiSession(mnservice.exe経由)は常にISDB_T(5)固定で使用、参照しない。
+        // DirectUsbSessionのみMode切替に対応(続報19): 0=DVB_T 2=ATSC 3=J83B 5=ISDB_T(既定)。
+        // 実機で安全と確認済みのこの4値のみGUIから選択可能(DTMB/J83Cはmnservice.exe自体を
+        // ハングさせる既知のバグ、J83A/DVB_T2は生レジスタでの実機挙動が未検証のため対象外)。
+        public uint Mode = 5;
         public int Constellation = 1;        // FieldID=19, 0=DQPSK 1=QPSK 2=QAM16 3=QAM64
         public uint Bandwidth = 6;           // FieldID=20, MHz, 宣言上0-10
         public int FFT = 1;                  // FieldID=21, 0=_2k 1=_8k 2=_4k

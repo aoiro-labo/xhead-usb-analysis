@@ -1231,6 +1231,35 @@ RF実測データ: `tools/rtlsdr_analysis/rtlsdr_dvbt_mode0_scan1/2.csv`・
 `rtlsdr_atsc_direct_scan1/2.csv`・`rtlsdr_j83b_direct_scan1/2.csv`・
 `rtlsdr_j83b_direct_afterstop.csv`。
 
+### 続報20 (2026-07-27): 続報19のMode切替を`tools/custom_sender`のGUI「直接USB」バックエンドにも統合
+
+続報19で`tools/direct_usb`のCLIに追加した`--mode`対応を、`tools/custom_sender`のGUIにも
+配線した。「変調/RF電力設定」タブに新しい「Mode（直接USB専用）」コンボ（DVB_T/ATSC/J83B/
+ISDB_T、実機で安全と確認済みの4値のみ——CLIの`--force-untested-mode`のような抜け道は
+GUIには設けていない）を追加し、選択に応じて:
+
+- 「変調方式」コンボの選択肢をそのModeが実際に持つConstellation enumへ動的に差し替える
+  （例: ATSCなら「8VSB」1択、J83Bなら「64QAM」「256QAM」の2択）。
+- Bandwidth/FFT/符号化率/ガードインターバル/時間インターリーブの各コントロールを、
+  そのModeが実際に使わないフィールドなら無効化する（ATSC/J83Bは全て無効、DVB_Tは
+  時間インターリーブのみ無効、ISDB_Tは全て有効）。
+
+`DirectUsbSession.StartChannel`（GUI側の送出ロジック）も`ModulationConfig.Mode`を見て
+`tools/direct_usb`の`RunConfigureSequence`と同じ基準でレジスタ書き込み列を組み立てるよう
+修正した（`0x0680`に実際のMode値を書き込み、フィールド集合もMode依存にする）。
+`GuiSession`（`mnservice.exe`経由バックエンド）側は変更していない——Mode切替は
+引き続き直接USBバックエンド専用。
+
+**ライブ検証（事実）**: GUIのバックエンドクラス(`DirectUsbSession`)を実際に呼び出すCLIの
+テスト経路（`tools/custom_sender --directtest --mode <値>`、新規追加）で、`mnservice.exe`を
+停止した状態からMode=ATSC(2)・Mode=J83B(3)を実行し、RTL-SDRでそれぞれ実際のRF出力
+（J83Bで+37.2dB）を確認した。GUI自体の見た目・操作連動も、`PrintWindow`によるウィンドウ
+キャプチャと`SendMessage`によるネイティブメッセージ送信（`BM_CLICK`でラジオボタン選択、
+`CB_SETCURSEL`でコンボボックス変更——実際のマウス操作やフォーカス変更は一切伴わない）で
+確認した: 「直接USB」選択→Mode=ATSC選択で、「変調方式」が「8VSB」のみに絞られ、
+Bandwidth/FFT/符号化率/ガードインターバル/時間インターリーブが正しくグレーアウトされる
+ことを確認済み。実機は終始`Get-PnpDevice`で`Status=OK`。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

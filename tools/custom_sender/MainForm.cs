@@ -44,6 +44,7 @@ namespace XHeadSender
         private Button _btnBrowseUrl;
         private Label _lblStatus;
         private NumericUpDown _numFrequency;
+        private ComboBox _cmbMode;
         private ComboBox _cmbConstellation;
         private NumericUpDown _numBandwidth;
         private ComboBox _cmbFFT;
@@ -331,13 +332,26 @@ namespace XHeadSender
             modLayout.Padding = new Padding(10, 10, 6, 4);
             _numFrequency = AddNumeric(modLayout, "周波数 (kHz)", 0, 1000000, 473000,
                 "送出する中心周波数(kHz)。既定の473000kHzはUHF473MHz(ISDB-Tの標準チャンネルの1つ)。");
+            _cmbMode = AddCombo(modLayout, "Mode（直接USB専用）", new[]
+            {
+                new ComboItem(0, "DVB_T"),
+                new ComboItem(2, "ATSC"),
+                new ComboItem(3, "J83B"),
+                new ComboItem(5, "ISDB_T (既定)"),
+            }, 3, "変調方式のMode切替(続報12・13・19)。「直接USB」接続方式でのみ有効 -- " +
+                "mnservice.exe経由バックエンドはISDB_T固定。ここに出ている4つは実機で安全に" +
+                "送出できると確認済みのModeのみ(DTMB/J83Cはmnservice.exe自体をハングさせる" +
+                "既知のバグがあり、J83A/DVB_T2は実機での生レジスタ挙動が未検証のため、" +
+                "GUIには意図的に出していない -- tools/direct_usb --mode の --force-untested-mode " +
+                "を使えばCLIからは試せる)。");
+            _cmbMode.SelectedIndexChanged += ModeChanged;
             _cmbConstellation = AddCombo(modLayout, "変調方式", new[]
             {
                 new ComboItem(0, "DQPSK"),
                 new ComboItem(1, "QPSK (既定)"),
                 new ComboItem(2, "16QAM"),
                 new ComboItem(3, "64QAM"),
-            }, 1, "ISDB-Tのキャリア変調方式。値が大きいほど高速だが電波状況に弱くなる。");
+            }, 1, "変調方式のキャリア変調(Constellation)。選択したModeによって有効な値が変わる。");
             _numBandwidth = AddNumeric(modLayout, "帯域幅 (MHz)", 0, 10, 6,
                 "占有帯域幅(MHz)。日本のISDB-Tは通常6MHz固定。");
             _cmbFFT = AddCombo(modLayout, "FFTモード", new[]
@@ -520,6 +534,7 @@ namespace XHeadSender
             return new ModulationConfig
             {
                 Frequency = (uint)_numFrequency.Value,
+                Mode = (uint)SelectedValue(_cmbMode),
                 Constellation = SelectedValue(_cmbConstellation),
                 Bandwidth = (uint)_numBandwidth.Value,
                 FFT = SelectedValue(_cmbFFT),
@@ -592,12 +607,70 @@ namespace XHeadSender
             _metaTab.Enabled = !direct;
             _epgTab.Enabled = !direct;
             _mediaTab.Enabled = !direct;
+            _cmbMode.Enabled = direct;
+            if (!direct)
+            {
+                // GuiSession(mnservice.exe経由)はISDB_T固定 -- Mode切替は続報19時点で未対応。
+                SelectComboValue(_cmbMode, 5);
+            }
             if (direct)
             {
                 Console.WriteLine("[GUI] 直接USBモードを選択 -- Source添付・チャンネル/番組メタデータ・EPG・" +
                     "メディア/コーデック設定は利用できません(いずれもmnservice.exe側のソフトウェア機能で、" +
                     "レジスタバスに対応物が無いため)。mnservice.exe/xhead_studio.exeを事前に停止しておいてください。");
             }
+        }
+
+        private static void SelectComboValue(ComboBox cmb, int value)
+        {
+            for (int i = 0; i < cmb.Items.Count; i++)
+            {
+                if (((ComboItem)cmb.Items[i]).Value == value) { cmb.SelectedIndex = i; return; }
+            }
+        }
+
+        /// <summary>
+        /// 続報19: Mode(直接USB専用)を切り替えたら、変調方式(Constellation)の選択肢と、
+        /// そのModeが実際に使わないフィールド(Bandwidth/FFT/CodeRate/GuardInterval/
+        /// TimeInterleavce)の有効/無効を実機ネイティブキャプチャの結果に合わせて更新する
+        /// (docs/protocol/modulation_capabilities.md「続報19」-- ATSC/J83BはConstellationのみ、
+        /// DVB_TはTimeInterleavceを持たない)。
+        /// </summary>
+        private void ModeChanged(object sender, EventArgs e)
+        {
+            uint mode = (uint)SelectedValue(_cmbMode);
+            ComboItem[] items;
+            int selectedIndex;
+            switch (mode)
+            {
+                case 0: // DVB_T
+                    items = new[] { new ComboItem(0, "QPSK"), new ComboItem(2, "16QAM"), new ComboItem(4, "64QAM (既定)") };
+                    selectedIndex = 2;
+                    break;
+                case 2: // ATSC
+                    items = new[] { new ComboItem(0, "8VSB (既定)") };
+                    selectedIndex = 0;
+                    break;
+                case 3: // J83B
+                    items = new[] { new ComboItem(1, "64QAM (既定)"), new ComboItem(3, "256QAM") };
+                    selectedIndex = 0;
+                    break;
+                default: // 5 = ISDB_T
+                    items = new[] { new ComboItem(0, "DQPSK"), new ComboItem(1, "QPSK (既定)"), new ComboItem(2, "16QAM"), new ComboItem(3, "64QAM") };
+                    selectedIndex = 1;
+                    break;
+            }
+            _cmbConstellation.Items.Clear();
+            foreach (var item in items) _cmbConstellation.Items.Add(item);
+            _cmbConstellation.SelectedIndex = selectedIndex;
+
+            bool hasOfdmFields = mode == 0 || mode == 5;   // DVB_T, ISDB_T
+            bool hasTimeInterleave = mode == 5;             // ISDB_T のみ
+            _numBandwidth.Enabled = hasOfdmFields;
+            _cmbFFT.Enabled = hasOfdmFields;
+            _cmbCodeRate.Enabled = hasOfdmFields;
+            _cmbGuardInterval.Enabled = hasOfdmFields;
+            _cmbTimeInterleavce.Enabled = hasTimeInterleave;
         }
 
         private async void BtnConnect_Click(object sender, EventArgs e)

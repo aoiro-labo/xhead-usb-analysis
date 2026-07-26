@@ -120,7 +120,10 @@ namespace XHeadSender
 
             if (args.Contains("--directtest"))
             {
-                return RunDirectUsbTest();
+                uint testMode = 5;
+                int modeIdx = Array.IndexOf(args, "--mode");
+                if (modeIdx >= 0 && modeIdx + 1 < args.Length) testMode = Convert.ToUInt32(args[modeIdx + 1]);
+                return RunDirectUsbTest(testMode);
             }
 
             if (args.Contains("--verbose-grpc"))
@@ -355,11 +358,16 @@ namespace XHeadSender
         /// こと(WinUSBインターフェースを排他保持するため)。既定値(473000kHz/QPSK/6MHz/...)で
         /// Open->StartChannel->8秒保持->StopChannel(実験的)->Closeを一通り実行する。
         /// </summary>
-        private static int RunDirectUsbTest()
+        private static int RunDirectUsbTest(uint mode = 5)
         {
-            Console.WriteLine("=== Direct USB backend test (bypasses mnservice.exe entirely) ===");
+            Console.WriteLine("=== Direct USB backend test (bypasses mnservice.exe entirely) === Mode=" + mode);
             var session = new DirectUsbSession();
-            var cfg = new ModulationConfig();
+            var cfg = new ModulationConfig { Mode = mode };
+            // Per-mode valid Constellation raw values (docs/protocol/modulation_capabilities.md 続報19):
+            // DVB_T needs its own QAM64=4 (ISDB_T's default 1=QPSK isn't in DVB_T's enum), ATSC only
+            // accepts 0=_8VSB, J83B/ISDB_T both happen to accept the ModulationConfig default (1).
+            if (mode == 0) cfg.Constellation = 4;
+            else if (mode == 2) cfg.Constellation = 0;
             try
             {
                 session.Open();
