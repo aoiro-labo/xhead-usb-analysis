@@ -62,6 +62,13 @@ analyzeHeadless.bat <projectDir> <projectName> -process mnservice.exe -noanalysi
   まとめてデコンパイルする版（`XHeadProgramApplyStack.java`と似ているが、複数の異なる
   呼び出し元候補を一度に確認する用途）。この手法でPAGain/DACGain書き込みの実装
   （`FUN_14039ba70`）を特定できた。
+- `XHeadFindRfCalibrationReader.java` — `getReferencesTo`で単発読み出しヘルパーの呼び出し元を
+  探したが0件だった（vtable経由の間接呼び出しのため、静的参照解析の限界の実例）。
+- `XHeadDecodeRfCalibrationChain.java` — 上記が空振りだったため、代わりにcdbの条件付き
+  ブレークポイント（`.if`で読み出しアドレスが`0x1280`〜`0x1283`のときだけ`kb`）で得た
+  呼び出し元アドレス群を直接デコンパイル。`mazo::mbroadcast::mCalibration`というRF較正
+  データ読み出しクラスを発見できた（[tools/usb_capture/README.md](../usb_capture/README.md)
+  「続報10」）。
 
 ## cdbでの動的解析（ライブブレークポイント）
 

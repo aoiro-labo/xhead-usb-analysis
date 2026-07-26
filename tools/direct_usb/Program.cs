@@ -146,10 +146,13 @@ namespace XHeadDirectUsb
                         0x0694, // TimeInterleavce (high confidence)
                         // RF power bank
                         0x1220, 0x1221, 0x1228, 0x1229, 0x1290,
-                        // RF power "gated" block -- static analysis said writes here are always
-                        // gated off, but a 2026-07-26 full-lifecycle cdb capture showed these ARE
-                        // read (0xa/0x88/0x0/0x4 observed) right before the DACGain/commit writes,
-                        // likely PA calibration/status data (tools/usb_capture/README.md "続報9").
+                        // Confirmed 2026-07-26: read-only RF calibration table, implemented in
+                        // mnservice.exe by a dedicated class (mazo::mbroadcast::mCalibration).
+                        // Writes here are always gated off; only ever read (0xa/0x88/0x0/0x4
+                        // observed), gated on 0x1220 showing its "committed" magic signature.
+                        // Likely where PAGain-related trimming actually lives, in software, rather
+                        // than PAGain being written to any register directly (tools/usb_capture/
+                        // README.md "続報10").
                         0x1280, 0x1281, 0x1282, 0x1283,
                         // Unidentified, stable across runs
                         0x0600, 0x0601, 0x0602, 0x0629, 0x0640, 0x0641, 0x0642,
