@@ -35,8 +35,8 @@
   - [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) — 実機検証済みの変調パラメータ一覧、Set経路の調査結果
   - [docs/gui_debug_mode_comparison.md](docs/gui_debug_mode_comparison.md) — 通常時/Debug有効時のGUIスクリーンショット比較
 - **ツール**
-  - [tools/custom_sender](tools/custom_sender) — 独自送出ツール（C#、`mnservice.exe`経由）
-  - [tools/direct_usb](tools/direct_usb) — `mnservice.exe`を介さずWinUSBで実機に直接読み書きする診断ツール（C#）
+  - [tools/custom_sender](tools/custom_sender) — 独自送出ツール（C#、CLI/GUI両対応。`mnservice.exe`経由・GUIの「直接USB」トグルで`mnservice.exe`非経由のどちらでも送出可能）
+  - [tools/direct_usb](tools/direct_usb) — `mnservice.exe`を介さずWinUSBで実機に直接読み書きする単体診断ツール（C#、`tools/custom_sender`の直接USBバックエンドの元になったロジック）
   - [tools/native_analysis](tools/native_analysis) — Ghidra/cdbによる`mnservice.exe`動的解析スクリプト・手順
   - [tools/usb_capture](tools/usb_capture) — USBプロトコル解析メモ
   - [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — RTL-SDRループバック検証メモ
@@ -53,7 +53,7 @@ XHEAD-STUDIOは **GUI (`xhead_studio.exe`)** と **バックグラウンドサ�
   <br><sub>左: 通常時／右: EnableDebugMode有効時（変調設定タブ）</sub>
 </p>
 
-さらに、GUI⇔サービス間の通信は固定メッセージではなく汎用的なプロパティツリー方式であり、公式GUIが一切参照していない設定項目がサービス側に存在する。実機から読み出した変調パラメータの完全なFieldID一覧は [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) にまとめてあり、ISDB-T以外にDVB-T2/ATSC/DTMB等のサブ構造体まで存在することが判明している。実際に`Mode=DVB_T`への切替を実機で試したところ`ChannelStart`まで完走し、ISDB_Tと同水準のRF出力も確認できた（変調チップ自体は多規格対応——詳細は同ドキュメント「続報12」）。`tools/custom_sender` はこのサービスに直接接続し、公式GUIの制限を経由せずフル機能へアクセスすることを目指す独自クライアントである。
+さらに、GUI⇔サービス間の通信は固定メッセージではなく汎用的なプロパティツリー方式であり、公式GUIが一切参照していない設定項目がサービス側に存在する。実機から読み出した変調パラメータの完全なFieldID一覧は [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) にまとめてあり、ISDB-T以外にDVB-T2/ATSC/DTMB等のサブ構造体まで存在することが判明している。実際に8モード全ての切替を実機で試したところ、`DVB_T`/`ATSC`/`J83B`は`ChannelStart`まで完走しISDB_Tと同水準のRF出力を確認できた（変調チップ自体は多規格対応）一方、`DTMB`/`J83C`は`mnservice.exe`をハングさせるモード固有のバグがあることも判明した——詳細は同ドキュメント「続報12・13」。`tools/custom_sender` はこのサービスに直接接続し、公式GUIの制限を経由せずフル機能へアクセスすることを目指す独自クライアントである。
 
 送出（Set）経路は当初`CmdProgramApply`が謎の`bad status`エラーで止まっていたが、Ghidra・cdbによるネイティブ動的解析の末に真因（エンコーダオブジェクトの未初期化）を特定し、さらに`CmdChannelStart`はSourceが一切存在しない段階で一度だけ呼ぶ「変調器・エンコーダの電源投入」操作であり、`CmdProgramApply`／`CmdSourceStart`はその後で「稼働中のパイプラインに実ソースを繋ぐ」別の後段ステップである、という公式アプリの実際のアーキテクチャを特定した。この順序と必須プロパティ群を揃えたところ送出パイプライン全体が動作した（詳細は [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) の「続報3・4」）。
 
@@ -67,7 +67,10 @@ docs/                          解析ドキュメント
     modulation_capabilities.md   実機で確認した変調パラメータの実際の姿(FieldID等)
   screenshots/                  上記ドキュメントで使用するスクリーンショット
 tools/
-  custom_sender/        独自送出ツール (C#, mnClientDotNet.dll を参照して mnservice.exe に直接接続)
+  custom_sender/        独自送出ツール (C#, CLI/GUI。mnServiceDotNet.dll経由でmnservice.exeに接続 or GUIの
+                         「直接USB」トグルでmnservice.exe非経由のWinUSB直接送出も可能)
+  direct_usb/            mnservice.exeを介さずWinUSBで実機に直接読み書きする単体診断ツール (C#)
+  native_analysis/       Ghidra/cdbによるmnservice.exe動的解析スクリプト・手順
   usb_capture/           USBプロトコル解析用スクリプト・メモ (USBPcap/Wireshark)
   rtlsdr_analysis/       RTL-SDRループバックによる実信号検証スクリプト
 captures/              実機キャプチャデータ（大容量のためリポジトリには含めない。.gitignore参照）
@@ -90,20 +93,32 @@ dotnet build
 # XHEAD-STUDIO (xhead_studio.exe) を一度起動してサービスを立ち上げた状態で:
 dotnet run                              # CLI: 疎通確認・プロパティツリーダンプ・フルパイプラインテスト(デスクトップキャプチャ送出)
 dotnet run -- --sourceurl [ファイルパス]  # CLI: 動画/TSファイルを指定して送出
-dotnet bin/Debug/net472/XHeadSender.exe --gui   # GUI: 変調パラメータ+RF電力+ソースを自由に設定して送出/停止
+./bin/Debug/net472/XHeadSender.exe --gui   # GUI: 接続方式(mnservice.exe経由/直接USB)・変調パラメータ+RF電力・
+                                            # チャンネル情報・ソースを自由に設定して送出/停止
+                                            # (net472はネイティブexeなので直接実行する。`dotnet <exe>`は
+                                            # hostpolicy.dllが無いというエラーで失敗するので使わないこと)
 ```
 
-GUI（`MainForm.cs`）は接続→変調パラメータ設定→`ChannelStart`による送出→停止→切断、を
-基本としている。周波数・Constellation・Bandwidth・FFT・CodeRate・GuardInterval・
-TimeInterleavce・RF電力(Level/PAGain/DACGain)を画面上の入力欄から自由に設定でき、
-`ChannelStart`単体で変調器を実際にRF駆動できる（[tools/direct_usb](tools/direct_usb)の
-`--configure`と同じ考え方を、こちらは公式サービス経由・プロパティ検証つきで行う版）。
-「ソース」欄で送出内容を選べる——RFのみ／デスクトップキャプチャ（実際の画面を送出）／
-動画ファイル指定（`.ts`等を選んで送出、[続報10](docs/protocol/modulation_capabilities.md)で
-再検証・動作確認済み）——STUDIO本体の基本動作（ファイル/画面を選んで送出開始）に相当する
-機能をGUI・CLI（`--sourceurl`）両方で実現している。カラーバー自己完結生成
-(`SourceTranscode`、[続報8](docs/protocol/modulation_capabilities.md)参照、クライアント側に
-既知の未解決バグあり)はまだGUI未統合。
+GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情報／変調・RF電力設定）+
+接続→送出開始→停止→切断のボタン操作を基本としている。冒頭の「接続方式」トグルで
+**mnservice.exe経由**（既定、全機能）と**直接USB**（`mnservice.exe`不要、
+[tools/direct_usb](tools/direct_usb)と同じWinUSB直接ロジックを`DirectUsbSession.cs`として
+統合したもの、変調パラメータ+RF電力設定のみ対応）を切り替えられる。
+
+- **変調・RF電力設定タブ**: 周波数・Constellation・Bandwidth・FFT・CodeRate・
+  GuardInterval・TimeInterleavce・RF電力(Level/PAGain/DACGain)を自由に設定でき、
+  `ChannelStart`単体で変調器を実際にRF駆動できる。
+- **チャンネル・番組情報タブ**（mnservice.exe経由のみ）: サービス名・ネットワーク名・TS名・
+  地域識別・放送事業者ID・リモコン番号・サービス番号・コピー制御
+  （`mMTSChannelParam`/`mMTSProgramParam`、[続報14](docs/protocol/modulation_capabilities.md)）。
+- **ソースタブ**（mnservice.exe経由のみ）: RFのみ／デスクトップキャプチャ（実際の画面を送出）／
+  動画ファイル指定（`.ts`等を選んで送出）——STUDIO本体の基本動作（ファイル/画面を選んで送出
+  開始）に相当する機能をGUI・CLI（`--sourceurl`）両方で実現している。
+
+CLIには他にモード切替（`--dvbt`/`--atsc`/`--j83b`等、[続報12・13](docs/protocol/modulation_capabilities.md)参照——`--dtmb`/`--j83c`は`mnservice.exe`をハングさせるため非推奨）、
+カラーバー自己完結生成（`--colorbar`、[続報8](docs/protocol/modulation_capabilities.md)参照、
+クライアント側に既知の未解決バグあり・GUI未統合）、直接USBバックエンド単体検証
+（`--directtest`）などの診断用フラグがある。
 
 ## 免責・注意事項
 

@@ -20,24 +20,26 @@ XHEAD-USBの出力オブジェクト: `ObjectType=ObjectOutputModulation`, `Path
 
 ### `Mode` が持つ8つの選択肢と、それぞれのサブ構造体
 
-`FieldConstSelect` という型名の通りタグ付きユニオン構造。**`DVB_T`への切替は`ChannelStart`
-まで完走しRF出力（470〜476MHz帯に+37〜39dB、ISDB_Tモードと同水準）も実測済み**——詳細は
-「続報12」参照。他7規格（J83A/ATSC/J83B/DTMB/J83C/DVB_T2、および`ISDB_T`自身以外）は
-未実施だが、DVB_Tと同じ「旧モードの固有フィールドを削除してから新モードの固有フィールドを
-追加する」パターンで恐らく同様に通ると推測される（未確認）。**下記はあくまで変調チップ/
-ファームウェアが「知っている」構造であって、XHEAD-USBのアンテナ回路や認証がISDB-T以外の
-規格の送出を安全・合法に行える保証は一切ない**。詳細は本ファイル末尾の注意事項を参照。
+`FieldConstSelect` という型名の通りタグ付きユニオン構造。**8モード全てを実機で切替テスト
+済み**（結果内訳: 成功3・安全な拒否2・サービスハング2、詳細は「続報12・13・14」参照）:
 
-| Mode | 主なフィールド |
-|---|---|
-| `DVB_T` | Constellation(QPSK/QAM16/QAM64), Bandwidth, FFT(2k/4k/8k), CodeRate(1/2〜7/8), GuardInterval(1/32〜1/4) |
-| `J83A` (欧州系ケーブルQAM) | Constellation(QAM16/32/64/128/256) |
-| `ATSC` | Constellation(8VSB固定) |
-| `J83B` (北米ケーブルQAM) | Constellation(QAM64/256) |
-| `DTMB` (中国地デジ) | Constellation, Bandwidth, CodeRate(0.4/0.6/0.8), Carrier(3780/1), Frame(420/945/595), Interleave(240/720) |
-| **`ISDB_T`** | 下表参照 |
-| `J83C` (日本ケーブルQAM) | Constellation(QAM64/256) |
-| `DVB_T2` | Version, Bandwidth, Function(拡張キャリア/コンステレーション回転/HEM/Null Packet Deletion), L1Constellation, PLPConstellation, FFT(1k〜32k), CodeRate(1/2〜2/5), GuardInterval(1/32〜19/256), PilotPattern(PP1-8), FEC(16200/64800), NetworkID(既定0x3085=12421), SystemID(既定0x8001=32769), FECBlockNums, SysmbolNums, TINumber, ISSYLength |
+| Mode | 主なフィールド | 実機テスト結果 |
+|---|---|---|
+| `DVB_T` | Constellation(QPSK/QAM16/QAM64), Bandwidth, FFT(2k/4k/8k), CodeRate(1/2〜7/8), GuardInterval(1/32〜1/4) | **成功**（RF出力+37〜39dB実測） |
+| `J83A` (欧州系ケーブルQAM) | Constellation(QAM16/32/64/128/256) | 安全な拒否（`modulation param invalid`） |
+| `ATSC` | Constellation(8VSB固定) | **成功**（RF出力+38〜47dB実測） |
+| `J83B` (北米ケーブルQAM) | Constellation(QAM64/256) | **成功**（RF出力+38dB実測） |
+| `DTMB` (中国地デジ) | Constellation, Bandwidth, CodeRate(0.4/0.6/0.8), Carrier(3780/1), Frame(420/945/595), Interleave(240/720) | **サービスハング**（`mnservice.exe`が無応答に、実機は健全） |
+| **`ISDB_T`** | 下表参照 | 通常モード（本ドキュメントの主対象） |
+| `J83C` (日本ケーブルQAM) | Constellation(QAM64/256) | **サービスハング**（同上、単一フィールドでも発生） |
+| `DVB_T2` | Version, Bandwidth, Function(拡張キャリア/コンステレーション回転/HEM/Null Packet Deletion), L1Constellation, PLPConstellation, FFT(1k〜32k), CodeRate(1/2〜2/5), GuardInterval(1/32〜19/256), PilotPattern(PP1-8), FEC(16200/64800), NetworkID(既定0x3085=12421), SystemID(既定0x8001=32769), FECBlockNums, SysmbolNums, TINumber, ISSYLength | 安全な拒否（`modulation param invalid`） |
+
+DTMB/J83Cのハングは物理的な実機の抜き差し後も再現する**モード固有の本物のバグ**と確認済み
+（続報14の訂正を参照——同種のハング症状が別原因（USB接続の劣化）だったケースもあるため
+混同注意）。ビットレベルでの規格準拠（正しいOFDMフレーム内容か）は成功した3モードとも未検証。
+**下記はあくまで変調チップ/ファームウェアが「知っている」構造であって、XHEAD-USBのアンテナ
+回路や認証がISDB-T以外の規格の送出を安全・合法に行える保証は一切ない**。詳細は本ファイル
+末尾の注意事項を参照。
 
 ### `ISDB_T` サブ構造体（公式Debugモードで見えていたものと完全一致）
 

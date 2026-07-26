@@ -171,9 +171,9 @@ which is itself notable (see §6).
 | `CmdUnsubscribe` | 2 | *(none)* | |
 | `CmdDisconnect` | 3 | *(none)* | |
 | `CmdControl` | 4 | `Control` (`msControlParam`) | via `sendControl`, not `sendRequest` |
-| `CmdApplyConfig` | 5 | *(none — uses `Properties`)* | generic property-list apply, see §5 |
+| `CmdApplyConfig` | 5 | *(none — uses `Properties`)* | **confirmed non-functional on the live server** (`UNAVAILABLE: unhandled command : [5]`) — despite the name, this is not how property values actually get applied; see the correction below and `docs/protocol/modulation_capabilities.md` §"Set経路の調査結果" |
 | `CmdChannelOpen` | 20 | `Channel` (`msChannelParam{Name}`) | reply carries full `msChannel` incl. assigned `HandleID` |
-| `CmdChannelClose/Reset/Start/Stop` | 21–24 | *(none — `HandleID` only)* | `Start`/`Stop` almost certainly begin/end actual RF transmission |
+| `CmdChannelClose/Reset/Start/Stop` | 21–24 | *(none — `HandleID` only)* | **confirmed live**: `Start` is where `Properties` actually rides (see §5.3) and is the once-per-connect "power on the modulator+encoder" call, not a per-source toggle; `Stop` tears it down |
 | `CmdProgramAdd` | 25 | `Content` (`msMediaContent`) | wires `SourceID`+`ProgramID`+`EngineID`+stream/node graph together |
 | `CmdProgramCommit/Reset/Apply` | 26–28 | *(none / `Properties`)* | |
 | `CmdSourceOpen` | 40 | `Source` (`msSourceParam`) | `Mode` selects URL/Capture/Transcode/Resample |
@@ -264,62 +264,51 @@ message msProperty {
    `msVariantType`-tagged oneof payload.
 3. **Set.** Build a new `msPropertyParam` with the same `Name` as the
    target descriptor and a `msVariant` per field you want to change
-   (`FieldID` + the appropriately-typed oneof value), and send it back —
-   most plausibly via `CmdApplyConfig` (`sendRequest`) with
-   `msRequest.Properties = [that msPropertyParam]`, since that's the only
-   command whose name matches "apply property values" and no
-   `CmdOutputApply` exists.
+   (`FieldID` + the appropriately-typed oneof value). **Confirmed live
+   (2026-07-24, superseding the inference below): `CmdApplyConfig` is
+   unimplemented server-side** (`UNAVAILABLE: unhandled command : [5]`)
+   despite being the only command whose name matches "apply property
+   values." The real mechanism, found by reading the decompiled GUI
+   (`xTaskStartChannel.cs` → `xHeadConfig.applyChannel()` →
+   `mnClient.Channel.startChannel(channel, props)`): every property group
+   for a channel (modulation, RF power, channel/program metadata, encoder,
+   EPG — six groups total for the modulation output) rides together as
+   `msRequest.Properties` on a single **`CmdChannelStart`** call, sent once
+   at connect time before any Source exists. There is no per-property-group
+   apply call and no `CmdOutputApply` — full details, the exact required
+   property set, and a worked live example are in
+   `docs/protocol/modulation_capabilities.md`.
 
 ### Worked example: ISDB-T modulation
 
-Using the real-world example values already recovered from the GUI's own
-local config JSON (`Channel: UHF_13, PowerLevel: 80, CodeRate: CR_5_6,
-GuardInterval: GI_1_16, FFT: FFT_8K, TimeInterleave: TI_MODE_3,
-Constellation: QAM_64`), and the debug-mode findings already on record
-(`docs/architecture.md` §3: these same 5 fields — Constellation, CodeRate,
-GuardInterval, FFT, TimeInterleave — are the ones the GUI hides unless
-`EnableDebugMode` is set, i.e. they exist on the wire regardless of GUI
-mode), a plausible reconstructed request to set `Constellation = QAM_64`
-on the RF-modulation output looks like:
+**This section originally showed a hypothetical request built from
+placeholder FieldIDs and a `CmdApplyConfig` call, before any live testing
+had been done.** Both have since been superseded by real, live-captured
+data — `CmdApplyConfig` doesn't work at all (see above), and the actual
+FieldIDs/mechanism are documented in full in
+`docs/protocol/modulation_capabilities.md` (real `msDescriptor` dumps,
+confirmed FieldIDs like `mModulationParam.Mode(ISDB_T).Constellation` =
+FieldID 19, and the real live request shape via `CmdChannelStart`). Rather
+than duplicate that content here (and risk it drifting out of sync again),
+this section now just points there — treat
+`docs/protocol/modulation_capabilities.md` as the authoritative worked
+example for this protocol, not this file.
 
-```jsonc
-// 1. connectService -> locate the output object
-// msResponse.Client.Outputs[i] where ObjectType == ObjectOutputModulation
-// -> HandleID = 0x00000042 (example), Properties[0].Property.Name == "mModulationParam"
-// -> walk Properties[0].Property.Fields[] to find { Name: "Constellation", FieldID: 7, Type: FieldSelect,
-//      Range: { RangeType: RangeSelect, RangeValues: { Values: [
-//          { Value: 0, Name: "QAM_64" }, { Value: 1, Name: "QAM_16" }, ... ] } } }
-// (FieldID and enumerated Values here are illustrative placeholders for the
-//  shape — actual numbers were not captured from a live session.)
-
-// 2. sendRequest — apply the new value
-msRequest {
-  Cmd: CmdApplyConfig
-  ClientID: <handle from step 1's msClient.HandleID>
-  HandleID: 0x00000042                 // the output object's HandleID
-  Properties: [
-    {
-      Name: "mModulationParam"
-      Values: [
-        { Type: VariantUint, FieldID: 7, UintVal: 0 }   // Constellation = QAM_64
-        // additional msVariant entries for CodeRate / GuardInterval / FFT /
-        // TimeInterleave / PowerLevel / Channel would ride in the same list
-      ]
-    }
-  ]
-}
-```
-
-The key point is that **the client never needs a compiled-in enum or
+The one thing worth restating here, since it's a schema-level point rather
+than a live-testing result: **the client never needs a compiled-in enum or
 struct for "modulation parameters"** — it discovers the field names,
 IDs, types, and legal value sets entirely at runtime from the
-`msDescriptor`/`msPropertyRange` returned at connect time, then speaks
+`msDescriptor`/`msPropertyRange` returned at connect time (inside
+`CmdChannelOpen`'s response, not a separate describe call), then speaks
 back using only the generic `msVariant`/`msPropertyParam` vocabulary
 defined in `ms_property.proto`. This also means **any field the device
 firmware exposes through this mechanism is reachable by a from-scratch
 client, including ones the official GUI's Simple/Advanced modes never
 surface** (matching the existing `EnableDebugMode` finding in
-`docs/architecture.md`).
+`docs/architecture.md`) — confirmed true in practice, not just inferred
+from the schema shape; `tools/custom_sender`'s GUI now exposes several
+such fields (channel/program metadata, non-ISDB-T `Mode` values) that no
+version of the official GUI has ever shown.
 
 `msConfigFile` (also in `ms_property.proto`) is a related, separate tree
 built from the same primitives (`msVariant`, `msPropertyRange`,
@@ -328,16 +317,25 @@ rather than a single object's live properties.
 
 ## 6. Surprising / notable findings
 
-- **RF parameters have no wire-level enforcement.** `msPropertyRange`
-  (Min/Max/enumerated Values) is metadata the *server publishes*; nothing
-  in the protocol itself stops a client from sending a `msVariant` outside
-  the declared range. XHEAD-USB is a UHF-band RF transmitter, and the
-  same property mechanism that carries `PowerLevel`/`Constellation`/etc.
-  is fully generic — whether `mnservice.exe` actually validates values
-  server-side before writing them (they very likely map directly onto a
-  native struct given `msPropertyField.Offset`/`Size`/`Tag`) is **not
-  verifiable from this client-side schema alone** and would need native
-  binary analysis. Flagging this as the most legally/safety-relevant item
+- **RF parameters have no wire-level enforcement, confirmed live.**
+  `msPropertyRange` (Min/Max/enumerated Values) is metadata the *server
+  publishes*; nothing in the protocol itself stops a client from sending a
+  `msVariant` outside the declared range. This is no longer just a schema-
+  level inference: sending `Frequency=999999` (technically within the
+  *declared* 0..1,000,000 range) **crashed `mnservice.exe` outright**
+  (native access violation, no clean rejection) — the declared range is
+  more permissive than what the real hardware/firmware actually tolerates.
+  Separately, some *other* invalid inputs (e.g. unsupported `Mode` values)
+  **are** rejected cleanly server-side with a real error message before
+  touching hardware — so validation exists for some fields/paths but not
+  others, and which is which isn't discoverable from the schema alone.
+  Full details, including a case where a field write hangs the entire
+  service rather than either succeeding or failing
+  (`mMTSChannelParam`/`mMTSProgramParam`, root-caused to environmental USB
+  degradation, not the protocol itself), are in
+  `docs/protocol/modulation_capabilities.md`. XHEAD-USB is a UHF-band RF
+  transmitter; treat any undeclared-safe value as a real risk, not just a
+  theoretical one. Flagging this as the most legally/safety-relevant item
   found.
 - **Firmware flashing is exposed on the same local gRPC surface** as
   everything else (`sendControl` + `msControlParam` +

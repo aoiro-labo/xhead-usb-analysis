@@ -6,7 +6,7 @@
 ## 1. ハードウェア
 
 - VID:PID = `17A7:0008`
-- Windows上のドライバクラスは **libusbk devices**（純正ベンダードライバではなく libusbK 系ドライバで認識されている状態。Zadig等で差し替え済みの可能性が高い。要確認）
+- Windows上のドライバクラスは **WinUSB**（`§5`参照——解析当初はlibusbKに誤って差し替わっていたことが判明し、WinUSBへ復元・固定済み）
 - 111×42×28mm, 約100g。USBバスパワー + RF出力(同軸)。
 
 ## 2. ソフトウェア構成（インストール先: `C:\Program Files\Micomsoft\XHEAD-STUDIO`）
@@ -144,9 +144,13 @@ XHEAD-2にはBML設定用の内蔵Webサーバー（`XHEAD-2_BML_WEB.pdf`参照�
 
 ## 7. 未解析・要調査
 
-- [ ] `mnservice.exe` 本体のネイティブ解析（USB生プロトコル、Ghidra/IDA向き）
-- [ ] libusbK 経由でのUSB通信を Wireshark + USBPcap で実キャプチャ（現在はWinUSBに復元済みのため、
-      比較のため意図的にlibusbKへ切り替えて観測するか要検討）
+- [x] `mnservice.exe` 本体のネイティブ解析（USB生プロトコル） → Ghidra（静的解析）+ cdb
+      （ライブブレークポイント）で広範に実施。「アドレス設定(0x4A)→読み書き(0x4E/0x4F)」の
+      汎用レジスタバスプロトコルを解読し、ISDB-T変調パラメータのレジスタアドレスをほぼ完全に
+      マップ化（[tools/usb_capture](../tools/usb_capture)、[tools/native_analysis](../tools/native_analysis)）。
+- [x] USB通信をUSBPcapで実キャプチャ → WinUSB経由で完了。バルク転送(24064バイト=MPEG-TS
+      188バイト×128、224スライスのリングバッファ)の生TSフレーミング、コントロール転送の
+      フローコントロール通知パターンを確認（[tools/usb_capture](../tools/usb_capture)）。
 - [x] gRPC reflection の有効性確認 → reflectionではなく `Ms*Reflection.cs` 埋め込みの
       `FileDescriptorProto` から確定情報を取得済み（`docs/protocol/`）
 - [x] Debugモード解放の実機確認 → ドライバ修正後、GUIに「BML」タブと「デバッグ機能を
@@ -158,10 +162,16 @@ XHEAD-2にはBML設定用の内蔵Webサーバー（`XHEAD-2_BML_WEB.pdf`参照�
       TimeInterleavce=24)に加え、`Mode`セレクタの選択肢としてDVB_T/J83A/ATSC/J83B/DTMB/J83C/
       DVB_T2の完全なサブ構造体まで存在することが判明（変調チップは多規格対応の可能性が高い。
       ただし実際にISDB-T以外へ切替可能・安全かは別問題。同ファイルの注意事項を参照）
-- [ ] RTL-SDRループバックでの実信号検証（設定値と実際のRF出力の対応関係）
+- [x] RTL-SDRループバックでの実信号検証（設定値と実際のRF出力の対応関係） →
+      [tools/rtlsdr_analysis](../tools/rtlsdr_analysis)で完了。ISDB_T・DVB_T・ATSC・J83Bの
+      各モードでRF電力上昇（+33〜47dB）を実測、Bandwidth変更によるスペクトラム形状の変化も確認。
+      `tools/direct_usb`（`mnservice.exe`非依存の直接USB経路）でも別途実証済み。
 - [x] Set経路の調査 → `CmdApplyConfig`は未実装(`unhandled command`)。正解は
       `CmdChannelStart`にPropertiesを同梱する方式（`docs/protocol/modulation_capabilities.md`
       「Set経路の調査結果」参照）。ただしSource/Contentを繋がずにStartを呼ぶと
       `mnservice.exe`がクラッシュすることを確認済み（実機には無害）。
-- [ ] Source(内蔵Colorbar等)を正しくアタッチした上での`CmdChannelStart`成功ケースの実装
-      （`msSourceParam`/`CmdSourceOpen`/`CmdProgramAdd`+`msMediaContent`の配線が必要、次のステップ）
+- [x] Source(内蔵Colorbar等)を正しくアタッチした上での`CmdChannelStart`成功ケースの実装 →
+      完了。デスクトップキャプチャ(`SourceCapture`)・動画ファイル(`SourceUrl`)・自己完結型
+      テスト信号(`SourceTranscode`、カラーバー/サイントーン)の3方式全てで実証済み
+      （`docs/protocol/modulation_capabilities.md`「続報4・8・10」）。`tools/custom_sender`の
+      CLI・GUI両方から利用可能。
