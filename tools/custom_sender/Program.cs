@@ -268,6 +268,14 @@ namespace XHeadSender
                             {
                                 RunColorbarTest(client, msClient, firstModulationOutputHandle, watcher);
                             }
+                            else if (args.Contains("--sourceurl"))
+                            {
+                                int urlIdx = Array.IndexOf(args, "--sourceurl");
+                                string urlPath = urlIdx + 1 < args.Length && !args[urlIdx + 1].StartsWith("--")
+                                    ? args[urlIdx + 1]
+                                    : @"C:\Users\aoiro\Videos\ts\Record_20251109-210722.ts";
+                                RunSourceUrlTest(client, msClient, firstModulationOutputHandle, watcher, urlPath);
+                            }
                             else
                             {
                                 RunFullPipelineTest(client, msClient, firstModulationOutputHandle, watcher);
@@ -999,6 +1007,222 @@ namespace XHeadSender
             if (sourceStartResp != null && sourceStartResp.Result == msResult.ResultSuccess)
             {
                 Console.WriteLine("  *** Colorbar source running! Check RTL-SDR now. Waiting 8s... ***");
+                Console.Out.Flush();
+                Thread.Sleep(8000);
+            }
+
+            var stopChReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = clientId, HandleID = chHandle };
+            var stopChResp = client.sendRequest(stopChReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ChannelStop: Result={stopChResp.Result}");
+
+            var sourceStopReq = new msRequest { Cmd = msServiceCmd.CmdSourceStop, ClientID = clientId, HandleID = src.HandleID };
+            client.sendRequest(sourceStopReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            CloseSource(client, clientId, src.HandleID);
+            CloseChannel(client, clientId, chHandle);
+        }
+
+        /// <summary>
+        /// 2026-07-26: retrying SourceUrl (file playback) now that the real root cause of "Content
+        /// never arrives" is known -- it was a client-side misreading, not a protocol limitation
+        /// (see the "続報" writeup in docs/protocol/modulation_capabilities.md: msEvent.Status is
+        /// an msEventStatus WRAPPER with its own Content field, and the official GUI's own handler
+        /// only reads .Status.Status, discarding .Status.Content -- reading it directly works).
+        /// That fix was only ever exercised via SourceCapture; this is the first retry against
+        /// SourceUrl specifically. mnFramework.mnURLParam's default constructor (reflected via
+        /// mnClientDotNet.dll) gives real default values: Mode=UrlAuto, QueueTime=30000ms,
+        /// Timeout=5000ms.
+        /// </summary>
+        private static void RunSourceUrlTest(msBroadcastService.msBroadcastServiceClient client, msClient msClient, uint outputHandle, EventWatcher watcher, string filePath)
+        {
+            uint clientId = msClient.HandleID;
+            Console.WriteLine();
+            Console.WriteLine($"=== SourceUrl test: ChannelOpen -> ProgramAdd/Commit -> ChannelStart -> SourceOpen(Url={filePath}) -> ProgramApply -> SourceStart ===");
+            Console.Out.Flush();
+
+            var openReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdChannelOpen,
+                ClientID = clientId,
+                HandleID = outputHandle,
+                Channel = new msChannelParam { Name = "XHeadSenderUrlTest" }
+            };
+            var openResp = client.sendRequest(openReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ChannelOpen: Result={openResp.Result} ParamCase={openResp.ParamCase}" +
+                (openResp.HasErrMessage ? $" ErrMessage={openResp.ErrMessage}" : ""));
+            if (openResp.ParamCase != msResponse.ParamOneofCase.Channel) return;
+            uint chHandle = openResp.Channel.HandleID;
+
+            var addReq = new msRequest { Cmd = msServiceCmd.CmdProgramAdd, ClientID = clientId, HandleID = chHandle };
+            var addResp = client.sendRequest(addReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramAdd: Result={addResp.Result} ParamCase={addResp.ParamCase}" +
+                (addResp.HasErrMessage ? $" ErrMessage={addResp.ErrMessage}" : ""));
+            if (addResp.ParamCase != msResponse.ParamOneofCase.Program)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            int programIndex = addResp.Program.Index;
+
+            var commitReq = new msRequest { Cmd = msServiceCmd.CmdProgramCommit, ClientID = clientId, HandleID = chHandle, Index = programIndex };
+            foreach (var prop in addResp.Program.Properties)
+            {
+                commitReq.Properties.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+            var commitResp = client.sendRequest(commitReq, deadline: DateTime.UtcNow.AddSeconds(5));
+            Console.WriteLine($"  ProgramCommit: Result={commitResp.Result}" +
+                (commitResp.HasErrMessage ? $" ErrMessage={commitResp.ErrMessage}" : ""));
+            if (commitResp.Result != msResult.ResultSuccess)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+
+            var channelStartProps = new List<msPropertyParam>();
+            foreach (var prop in openResp.Channel.Properties)
+            {
+                channelStartProps.Add(new msPropertyParam { Name = prop.Property.Name, Values = { prop.Param.Values } });
+            }
+            SetPropertyValue(channelStartProps, "mModulationParam", 19, v => v.IntVal = 1);
+            SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 0, v => v.UintVal = 90);
+            SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 1, v => v.IntVal = 2);
+            SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 2, v => v.IntVal = -10);
+            Console.WriteLine("  Overriding before ChannelStart: mModulationParam.Constellation=QPSK(1), " +
+                "mPSRFPowerAdjust.Level=90/PAGain=2/DACGain=-10 (473000kHz table entry, known-good baseline)");
+
+            var earlyStartReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };
+            earlyStartReq.Properties.AddRange(channelStartProps);
+            msResponse earlyStartResp;
+            try
+            {
+                earlyStartResp = client.sendRequest(earlyStartReq, deadline: DateTime.UtcNow.AddSeconds(10));
+                Console.WriteLine($"  ChannelStart(early): Result={earlyStartResp.Result} Status={earlyStartResp.Status} ParamCase={earlyStartResp.ParamCase}" +
+                    (earlyStartResp.HasErrMessage ? $" ErrMessage={earlyStartResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  ChannelStart(early) RPC error: {ex.Status}");
+                earlyStartResp = null;
+            }
+            if (earlyStartResp == null || earlyStartResp.Result != msResult.ResultSuccess)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            Console.WriteLine("  *** ChannelStart(early) SUCCEEDED. Opening SourceUrl... ***");
+            Console.Out.Flush();
+
+            var sourceOpenReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdSourceOpen,
+                ClientID = clientId,
+                Source = new msSourceParam
+                {
+                    Mode = msSourceMode.SourceUrl,
+                    Name = "XHeadSenderUrlSource",
+                    URL = new msURLParam { Url = filePath, Mode = msURLMode.UrlAuto, QueueTime = 30000, Timeout = 5000 }
+                }
+            };
+            msResponse sourceResp;
+            try
+            {
+                sourceResp = client.sendRequest(sourceOpenReq, deadline: DateTime.UtcNow.AddSeconds(10));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  SourceOpen(Url) RPC error: {ex.Status}");
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            Console.WriteLine($"  SourceOpen(Url): Result={sourceResp.Result} ParamCase={sourceResp.ParamCase}" +
+                (sourceResp.HasErrMessage ? $" ErrMessage={sourceResp.ErrMessage}" : ""));
+            Console.Out.Flush();
+            if (sourceResp.ParamCase != msResponse.ParamOneofCase.Source)
+            {
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            var src = sourceResp.Source;
+            Console.WriteLine($"  Source: HandleID={src.HandleID} Status={src.Status} Mode={src.Mode} ContentPrograms={src.Content?.Programs.Count ?? 0}");
+
+            // Real file needs async Media Foundation probing (documented ~9s for a 46MB TS file
+            // historically) -- always wait for the event, don't assume synchronous Content like
+            // the synthetic colorbar source.
+            Console.WriteLine("  Waiting for EventSourceStatus to reach StatusReady (up to 20s, async file probing)...");
+            Console.Out.Flush();
+            var finalStatus = watcher.WaitForStatusReady(src.HandleID, TimeSpan.FromSeconds(20));
+            Console.WriteLine($"  Source status after wait: {finalStatus?.Status} ContentPrograms={finalStatus?.Content?.Programs.Count ?? 0}");
+            if ((finalStatus?.Content?.Programs.Count ?? 0) == 0)
+            {
+                Console.WriteLine("  Source never reported Content -- aborting.");
+                CloseSource(client, clientId, src.HandleID);
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+            var srcProgram = finalStatus.Content.Programs[0];
+            Console.WriteLine($"  Source's Program ID={srcProgram.ID} Streams={srcProgram.Streams.Count}");
+            foreach (var s in srcProgram.Streams) Console.WriteLine($"    Stream Index={s.Index} ID={s.ID} Format={s.Format}");
+            Console.Out.Flush();
+
+            var chosenEngine = msClient.Engines.FirstOrDefault(e =>
+                (e.Name?.IndexOf("nvidia", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (e.Name?.IndexOf("cuvid", StringComparison.OrdinalIgnoreCase) >= 0))
+                ?? (msClient.Engines.Count > 0 ? msClient.Engines[0] : null);
+            Console.WriteLine($"  Chosen engine: HandleID={chosenEngine?.HandleID} Name={chosenEngine?.Name}");
+
+            var content = new msMediaContent
+            {
+                Index = 0,
+                Param = new msMediaParam { Functions = msMediaFunction.MediaNone },
+                SourceID = src.HandleID,
+                ProgramID = srcProgram.ID,
+                EngineID = chosenEngine?.HandleID ?? 0
+            };
+            foreach (var s in srcProgram.Streams)
+            {
+                var contentStream = new msMediaContent.Types.Stream { Index = s.Index };
+                contentStream.Nodes.Add(new msMediaContent.Types.Node { Mode = msMediaContent.Types.NodeMode.NodePassthrough });
+                content.Streams.Add(contentStream);
+            }
+
+            var applyReq = new msRequest { Cmd = msServiceCmd.CmdProgramApply, ClientID = clientId, HandleID = chHandle, Content = content };
+            msResponse applyResp;
+            try
+            {
+                applyResp = client.sendRequest(applyReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine($"  ProgramApply: Result={applyResp.Result}" +
+                    (applyResp.HasErrMessage ? $" ErrMessage={applyResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  ProgramApply RPC error: {ex.Status}");
+                applyResp = null;
+            }
+            Console.Out.Flush();
+            if (applyResp == null || applyResp.Result != msResult.ResultSuccess)
+            {
+                CloseSource(client, clientId, src.HandleID);
+                CloseChannel(client, clientId, chHandle);
+                return;
+            }
+
+            var sourceStartReq = new msRequest { Cmd = msServiceCmd.CmdSourceStart, ClientID = clientId, HandleID = src.HandleID };
+            msResponse sourceStartResp;
+            try
+            {
+                sourceStartResp = client.sendRequest(sourceStartReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine($"  SourceStart: Result={sourceStartResp.Result} Status={sourceStartResp.Status}" +
+                    (sourceStartResp.HasErrMessage ? $" ErrMessage={sourceStartResp.ErrMessage}" : ""));
+            }
+            catch (RpcException ex)
+            {
+                Console.WriteLine($"  SourceStart RPC error: {ex.Status}");
+                sourceStartResp = null;
+            }
+            Console.Out.Flush();
+
+            if (sourceStartResp != null && sourceStartResp.Result == msResult.ResultSuccess)
+            {
+                Console.WriteLine("  *** File source running! Check RTL-SDR now. Waiting 8s... ***");
                 Console.Out.Flush();
                 Thread.Sleep(8000);
             }

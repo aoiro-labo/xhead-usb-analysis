@@ -17,6 +17,7 @@
 | 実機からの変調パラメータ確定（FieldID・許容値） | 完了 | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) |
 | 独自送出ツール: 読み取り（プロパティツリーのダンプ） | 完了 | `tools/custom_sender` |
 | 独自送出ツール: 書き込み（`CmdChannelStart`経由でのSet） | 完了 | `ChannelOpen`→`ProgramAdd/Commit`→**`ChannelStart`(Source構築前・全プロパティ群込み)**→`Source`構築→`ProgramApply`→`SourceStart`という正しいアーキテクチャを特定。値の変更（Constellation・RF電力のPAGain/DACGain）が実際に物理層まで反映されることもネイティブログで実証済み。GUI(`--gui`)も追加し、CLI/GUI両方から送出可能 |
+| 実ソース添付（動画ファイル`SourceUrl`／デスクトップキャプチャ`SourceCapture`） | 完了 | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報10」— STUDIOの基本動作（ファイル/画面を選んで送出）に相当。CLI(`--sourceurl`)・GUI(ソース選択ラジオボタン)の両方に統合、RTL-SDRでRF出力も実証済み。「STUDIOでできることは自分のツールでもできるように」という方針の最初の成果 |
 | ソース種別: カラーバー/サイントーン自己完結生成（`SourceTranscode`） | 部分的成功 | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報8」— 外部ファイル・キャプチャ不要な自己完結テスト信号ソースを発見。正しいフォーマット(H264/MP1_L2、Rawは拒否される)を指定すればRF出力まで到達（RTL-SDRで+34〜35dB実測）。ただしクライアント側が`SourceOpen`応答の受信で例外を投げる既知の問題が未解決（`tools/custom_sender --colorbar`） |
 | 出力時のBML付与（データ放送） | 部分的成功 | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報9」— `mPSEncodeParam.BMLFile`(FieldID=38)は固定パスのローカル`.xbml`ファイルを指す方式と判明。手作りの最小限`.xbml`ファイルでXHEAD-STUDIO本体の「存在しない」警告が消え、送出・RF出力ともに正常動作を確認。ファイル内容が正しくパースされ実際にデータ放送として多重化されるかはビットレベルで未確認 |
 | RTL-SDRループバックでの実信号検証 | 完了 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出前後で470〜476MHz帯（6MHz幅、ISDB-Tの帯域幅と一致）に約38dBのパワー上昇を実測、送出停止で消失することも確認。設定した中心周波数473MHzとも一致 |
@@ -84,8 +85,9 @@ C#製。公式インストール済みの `mnClientDotNet.dll` を参照して `
 cd tools/custom_sender
 dotnet build
 # XHEAD-STUDIO (xhead_studio.exe) を一度起動してサービスを立ち上げた状態で:
-dotnet run                              # CLI: 疎通確認・プロパティツリーダンプ・フルパイプラインテスト
-dotnet bin/Debug/net472/XHeadSender.exe --gui   # GUI: 変調パラメータ+RF電力を自由に設定して送出/停止
+dotnet run                              # CLI: 疎通確認・プロパティツリーダンプ・フルパイプラインテスト(デスクトップキャプチャ送出)
+dotnet run -- --sourceurl [ファイルパス]  # CLI: 動画/TSファイルを指定して送出
+dotnet bin/Debug/net472/XHeadSender.exe --gui   # GUI: 変調パラメータ+RF電力+ソースを自由に設定して送出/停止
 ```
 
 GUI（`MainForm.cs`）は接続→変調パラメータ設定→`ChannelStart`による送出→停止→切断、を
@@ -93,11 +95,12 @@ GUI（`MainForm.cs`）は接続→変調パラメータ設定→`ChannelStart`�
 TimeInterleavce・RF電力(Level/PAGain/DACGain)を画面上の入力欄から自由に設定でき、
 `ChannelStart`単体で変調器を実際にRF駆動できる（[tools/direct_usb](tools/direct_usb)の
 `--configure`と同じ考え方を、こちらは公式サービス経由・プロパティ検証つきで行う版）。
-「デスクトップキャプチャを送出する」にチェックを入れると、実際の画面をキャプチャして
-送出内容として乗せる（CLI版`RunFullPipelineTest`と同じ経路、動作実証済み）——STUDIO本体の
-基本動作に相当する機能をGUIでも実現している。動画ファイル指定(`SourceUrl`)・カラーバー
-自己完結生成(`SourceTranscode`、[続報8](docs/protocol/modulation_capabilities.md)参照、
-クライアント側に既知の未解決バグあり)はまだGUI未統合。
+「ソース」欄で送出内容を選べる——RFのみ／デスクトップキャプチャ（実際の画面を送出）／
+動画ファイル指定（`.ts`等を選んで送出、[続報10](docs/protocol/modulation_capabilities.md)で
+再検証・動作確認済み）——STUDIO本体の基本動作（ファイル/画面を選んで送出開始）に相当する
+機能をGUI・CLI（`--sourceurl`）両方で実現している。カラーバー自己完結生成
+(`SourceTranscode`、[続報8](docs/protocol/modulation_capabilities.md)参照、クライアント側に
+既知の未解決バグあり)はまだGUI未統合。
 
 ## 免責・注意事項
 

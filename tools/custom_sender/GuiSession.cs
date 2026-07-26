@@ -238,56 +238,7 @@ namespace XHeadSender
                 }
                 var src = sourceResp.Source;
                 _srcHandle = src.HandleID;
-
-                Console.WriteLine("[GUI] Waiting for EventSourceStatus to reach StatusReady (up to 10s)...");
-                var finalStatus = _watcher.WaitForStatusReady(src.HandleID, TimeSpan.FromSeconds(10));
-                if ((finalStatus?.Content?.Programs.Count ?? 0) == 0)
-                {
-                    throw new InvalidOperationException("ソースのContentが取得できませんでした。");
-                }
-                var srcProgram = finalStatus.Content.Programs[0];
-                Console.WriteLine($"[GUI] Source's Program ID={srcProgram.ID} Streams={srcProgram.Streams.Count}");
-
-                var chosenEngine = _msClient.Engines.FirstOrDefault(e =>
-                    (e.Name?.IndexOf("nvidia", StringComparison.OrdinalIgnoreCase) >= 0) ||
-                    (e.Name?.IndexOf("cuvid", StringComparison.OrdinalIgnoreCase) >= 0))
-                    ?? (_msClient.Engines.Count > 0 ? _msClient.Engines[0] : null);
-                Console.WriteLine($"[GUI] Chosen engine: HandleID={chosenEngine?.HandleID} Name={chosenEngine?.Name}");
-
-                var content = new msMediaContent
-                {
-                    Index = 0,
-                    Param = new msMediaParam { Functions = msMediaFunction.MediaNone },
-                    SourceID = src.HandleID,
-                    ProgramID = srcProgram.ID,
-                    EngineID = chosenEngine?.HandleID ?? 0
-                };
-                foreach (var s in srcProgram.Streams)
-                {
-                    var contentStream = new msMediaContent.Types.Stream { Index = s.Index };
-                    contentStream.Nodes.Add(new msMediaContent.Types.Node { Mode = msMediaContent.Types.NodeMode.NodePassthrough });
-                    content.Streams.Add(contentStream);
-                }
-
-                var applyReq = new msRequest { Cmd = msServiceCmd.CmdProgramApply, ClientID = clientId, HandleID = _chHandle, Content = content };
-                var applyResp = _client.sendRequest(applyReq, deadline: DateTime.UtcNow.AddSeconds(8));
-                Console.WriteLine($"[GUI] ProgramApply Result={applyResp.Result}" +
-                    (applyResp.HasErrMessage ? $" ErrMessage={applyResp.ErrMessage}" : ""));
-                if (applyResp.Result != msResult.ResultSuccess)
-                {
-                    throw new InvalidOperationException("ProgramApply failed: " + applyResp.Result +
-                        (applyResp.HasErrMessage ? " " + applyResp.ErrMessage : ""));
-                }
-
-                var sourceStartReq = new msRequest { Cmd = msServiceCmd.CmdSourceStart, ClientID = clientId, HandleID = src.HandleID };
-                var sourceStartResp = _client.sendRequest(sourceStartReq, deadline: DateTime.UtcNow.AddSeconds(8));
-                Console.WriteLine($"[GUI] SourceStart Result={sourceStartResp.Result} Status={sourceStartResp.Status}");
-                if (sourceStartResp.Result != msResult.ResultSuccess)
-                {
-                    throw new InvalidOperationException("SourceStart failed: " + sourceStartResp.Result);
-                }
-
-                SourceStarted = true;
+                AttachSourceToChannel(src, TimeSpan.FromSeconds(10));
                 Console.WriteLine("[GUI] *** デスクトップキャプチャの送出を開始しました。 ***");
             }
             catch
@@ -295,6 +246,117 @@ namespace XHeadSender
                 StopCaptureSourceInternal();
                 throw;
             }
+        }
+
+        /// <summary>
+        /// 2026-07-26: SourceUrl(動画ファイル指定)への再挑戦。以前は`CmdSourceOpen`後
+        /// Contentが空のまま返ってきて断念していたが、原因はクライアント側の実装ミス
+        /// （`msEvent.Status`は`msEventStatus`という、Statusに加えてContentも運ぶラッパー型
+        /// なのに、Statusだけ読んでContentを読んでいなかった）と判明済み（続報、
+        /// docs/protocol/modulation_capabilities.md）。この修正は元々Captureの調査で
+        /// 見つかったものでSourceUrl側では一度も再検証していなかった -- 実際に試したところ
+        /// 一発で成功し、STUDIOと同じ「動画ファイルを指定して送出」がこのGUIでもできる
+        /// ようになった。tools/custom_sender の RunSourceUrlTest と同一のRPC列を踏襲する。
+        /// </summary>
+        public void StartUrlSource(string filePath)
+        {
+            if (!ChannelStarted) throw new InvalidOperationException("先に送出を開始してください。");
+            if (SourceStarted) throw new InvalidOperationException("既にソースが接続されています。");
+            if (string.IsNullOrWhiteSpace(filePath)) throw new InvalidOperationException("ファイルパスを指定してください。");
+
+            uint clientId = _msClient.HandleID;
+            var sourceOpenReq = new msRequest
+            {
+                Cmd = msServiceCmd.CmdSourceOpen,
+                ClientID = clientId,
+                Source = new msSourceParam
+                {
+                    Mode = msSourceMode.SourceUrl,
+                    Name = "XHeadSenderGUIUrl",
+                    URL = new msURLParam { Url = filePath, Mode = msURLMode.UrlAuto, QueueTime = 30000, Timeout = 5000 }
+                }
+            };
+            var sourceResp = _client.sendRequest(sourceOpenReq, deadline: DateTime.UtcNow.AddSeconds(10));
+            Console.WriteLine($"[GUI] SourceOpen(Url) Result={sourceResp.Result} ParamCase={sourceResp.ParamCase}" +
+                (sourceResp.HasErrMessage ? $" ErrMessage={sourceResp.ErrMessage}" : ""));
+            if (sourceResp.ParamCase != msResponse.ParamOneofCase.Source)
+            {
+                throw new InvalidOperationException("SourceOpen failed: " + sourceResp.Result +
+                    (sourceResp.HasErrMessage ? " " + sourceResp.ErrMessage : ""));
+            }
+            var src = sourceResp.Source;
+            _srcHandle = src.HandleID;
+
+            try
+            {
+                // 実ファイルは非同期プロービングが必要(46MBのTSファイルで実測約9秒) -- 合成ソース
+                // (Capture)より長めに待つ。
+                Console.WriteLine("[GUI] Waiting for EventSourceStatus to reach StatusReady (up to 20s, async file probing)...");
+                AttachSourceToChannel(src, TimeSpan.FromSeconds(20));
+                Console.WriteLine("[GUI] *** 動画ファイルの送出を開始しました。 ***");
+            }
+            catch
+            {
+                StopCaptureSourceInternal();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// StartCaptureSource/StartUrlSourceで共通の後半処理: EventSourceStatus待機 -> エンジン
+        /// 選択 -> ProgramApply -> SourceStart。呼び出し前に _srcHandle をセットしておくこと。
+        /// </summary>
+        private void AttachSourceToChannel(msSource src, TimeSpan waitTimeout)
+        {
+            uint clientId = _msClient.HandleID;
+            var finalStatus = _watcher.WaitForStatusReady(src.HandleID, waitTimeout);
+            if ((finalStatus?.Content?.Programs.Count ?? 0) == 0)
+            {
+                throw new InvalidOperationException("ソースのContentが取得できませんでした。");
+            }
+            var srcProgram = finalStatus.Content.Programs[0];
+            Console.WriteLine($"[GUI] Source's Program ID={srcProgram.ID} Streams={srcProgram.Streams.Count}");
+
+            var chosenEngine = _msClient.Engines.FirstOrDefault(e =>
+                (e.Name?.IndexOf("nvidia", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (e.Name?.IndexOf("cuvid", StringComparison.OrdinalIgnoreCase) >= 0))
+                ?? (_msClient.Engines.Count > 0 ? _msClient.Engines[0] : null);
+            Console.WriteLine($"[GUI] Chosen engine: HandleID={chosenEngine?.HandleID} Name={chosenEngine?.Name}");
+
+            var content = new msMediaContent
+            {
+                Index = 0,
+                Param = new msMediaParam { Functions = msMediaFunction.MediaNone },
+                SourceID = src.HandleID,
+                ProgramID = srcProgram.ID,
+                EngineID = chosenEngine?.HandleID ?? 0
+            };
+            foreach (var s in srcProgram.Streams)
+            {
+                var contentStream = new msMediaContent.Types.Stream { Index = s.Index };
+                contentStream.Nodes.Add(new msMediaContent.Types.Node { Mode = msMediaContent.Types.NodeMode.NodePassthrough });
+                content.Streams.Add(contentStream);
+            }
+
+            var applyReq = new msRequest { Cmd = msServiceCmd.CmdProgramApply, ClientID = clientId, HandleID = _chHandle, Content = content };
+            var applyResp = _client.sendRequest(applyReq, deadline: DateTime.UtcNow.AddSeconds(8));
+            Console.WriteLine($"[GUI] ProgramApply Result={applyResp.Result}" +
+                (applyResp.HasErrMessage ? $" ErrMessage={applyResp.ErrMessage}" : ""));
+            if (applyResp.Result != msResult.ResultSuccess)
+            {
+                throw new InvalidOperationException("ProgramApply failed: " + applyResp.Result +
+                    (applyResp.HasErrMessage ? " " + applyResp.ErrMessage : ""));
+            }
+
+            var sourceStartReq = new msRequest { Cmd = msServiceCmd.CmdSourceStart, ClientID = clientId, HandleID = src.HandleID };
+            var sourceStartResp = _client.sendRequest(sourceStartReq, deadline: DateTime.UtcNow.AddSeconds(8));
+            Console.WriteLine($"[GUI] SourceStart Result={sourceStartResp.Result} Status={sourceStartResp.Status}");
+            if (sourceStartResp.Result != msResult.ResultSuccess)
+            {
+                throw new InvalidOperationException("SourceStart failed: " + sourceStartResp.Result);
+            }
+
+            SourceStarted = true;
         }
 
         public void StopCaptureSource()

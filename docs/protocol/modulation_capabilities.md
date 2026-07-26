@@ -102,6 +102,12 @@ gRPC接続そのものが切断され(`Stream removed`)、プロセスが完全�
 
 ### Source接続時の追加調査 (2026-07-25)
 
+**2026-07-26追記**: この節で「行き詰まった」と結論しているContent取得問題は、直後の「続報」で
+判明した通りクライアント側の実装ミスが原因であり、`SourceUrl`自体が壊れていたわけではなかった。
+ただしこの節が書かれた時点ではまだ`SourceCapture`側でしか修正・再検証しておらず、
+`SourceUrl`自体はその後一度も再テストされないまま放置されていた。2026-07-26に再挑戦して
+**一発で成功**している——詳細は本ファイル末尾の「続報10」を参照。
+
 `ChannelOpen → ProgramAdd → ProgramCommit → SourceOpen(Mode=SourceUrl)` まではクラッシュせず
 `ResultSuccess`で進行することを確認した。ただし以下の理由で `ProgramApply`/`ChannelStart` まで
 到達できていない。
@@ -597,6 +603,45 @@ undefined1 FUN_1400a56f0(char *path) {
 - 未解決: ファイルの中身（バイナリ構造・PID/ComponentTag/ESInfo/生TSデータ）が実際に
   正しく解釈されているかは、対応するパーサー関数の解析もビットレベルでのTS確認も
   できておらず未確認。
+
+### 続報10 (2026-07-26): `SourceUrl`再挑戦 — 一発成功、GUIにも統合
+
+ユーザーから「STUDIOでできることは自分のツールでもできるようにしたい」という長期方針が
+示され、まずギャップ分析（実ソース添付・`mPSEncodeParam`全フィールド・BML統合・
+チャンネル/番組メタデータ等）を行った上で、最初の一手としてデスクトップキャプチャの
+GUI統合（後述）を終えた直後、次点として`SourceUrl`（動画ファイル指定）に再挑戦した。
+
+続報（EventSourceStatusは実はContentを運んでいた）で判明した根本原因の修正
+（`ev.Status.Content`を直接読む）は、当時`SourceCapture`側の調査中に見つかったもので、
+**`SourceUrl`側では一度も再検証されないまま放置されていた**。同じ`EventWatcher`の仕組みを
+そのまま使い、実TSファイル（`C:\Users\aoiro\Videos\ts\Record_20251109-210722.ts`、46MB、
+以前の調査と同一ファイル）で試したところ:
+
+```
+SourceOpen(Url): Result=ResultSuccess ParamCase=Source
+Waiting for EventSourceStatus to reach StatusReady...
+Source status after wait: StatusReady ContentPrograms=2
+Source's Program ID=3096 Streams=3
+  Stream Index=0: Video 1440x1080 Interlaced FPS_29_97
+  Stream Index=1/2: Audio AAC_LC_ADTS 48000Hz Stereo
+ProgramApply: Result=ResultSuccess
+SourceStart: Result=ResultSuccess Status=StatusRunning
+```
+
+**一発で成功**。RTL-SDRでも実RF出力を確認した（470〜476MHz帯に+34〜36dB、既知のシグネチャと
+一致）。1回目の検証では8秒の保持時間中にスキャンのタイミングを逃して小さな差分しか
+観測できなかったが、保持時間を一時的に延ばして再試行したところ確実に確認できた——
+タイミングの問題であり、送出そのものは1回目から成功していた。
+
+`tools/custom_sender`のCLI（`--sourceurl [ファイルパス]`、省略時は上記ファイルを使用）と
+GUI（`GuiSession.StartUrlSource`、ソース選択に「動画ファイル」ラジオボタン+パス入力欄+
+ファイル選択ダイアログを追加）の両方に統合した。`SourceCapture`用に書いた
+`StartCaptureSource`と共通のRPC後半処理（`EventSourceStatus`待機→エンジン選択→
+`ProgramApply`→`SourceStart`）を`AttachSourceToChannel`として切り出して再利用している。
+
+これで`SourceUrl`（ファイル）・`SourceCapture`（デスクトップキャプチャ）の2つの実ソースが
+CLI・GUI両方から動作確認済みとなった。残っているのは`SourceTranscode`（カラーバー、
+クライアント側のレスポンス処理に既知のバグあり、続報8参照）のGUI統合。
 
 ## 重要な注意事項
 

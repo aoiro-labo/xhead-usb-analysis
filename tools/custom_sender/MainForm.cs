@@ -31,7 +31,11 @@ namespace XHeadSender
         private Button _btnStart;
         private Button _btnStop;
         private Button _btnDisconnect;
-        private CheckBox _chkAttachCapture;
+        private RadioButton _rbSourceNone;
+        private RadioButton _rbSourceCapture;
+        private RadioButton _rbSourceUrl;
+        private TextBox _txtUrlPath;
+        private Button _btnBrowseUrl;
         private Label _lblStatus;
         private NumericUpDown _numFrequency;
         private ComboBox _cmbConstellation;
@@ -101,17 +105,43 @@ namespace XHeadSender
             btnPanel.Controls.Add(_btnStop);
             btnPanel.Controls.Add(_btnDisconnect);
 
-            var capPanel = new Panel { Dock = DockStyle.Top, Height = 26, Padding = new Padding(8, 2, 8, 0) };
-            _chkAttachCapture = new CheckBox
+            var sourceGroup = new GroupBox
             {
-                Text = "デスクトップキャプチャを送出する（実映像を乗せる）",
+                Text = "ソース",
+                Dock = DockStyle.Top,
+                Padding = new Padding(10, 4, 6, 10),
                 AutoSize = true,
-                Dock = DockStyle.Left,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
             };
-            _toolTip.SetToolTip(_chkAttachCapture,
-                "オフの場合は変調器のRF出力のみ(ChannelStartだけ)。オンにすると実際にデスクトップ画面を" +
-                "キャプチャして送出内容として乗せる(tools/custom_sender の RunFullPipelineTest と同じ経路、動作実証済み)。");
-            capPanel.Controls.Add(_chkAttachCapture);
+            var sourceLayout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true };
+            sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            _rbSourceNone = new RadioButton { Text = "RFのみ（既定、送出内容なし）", AutoSize = true, Checked = true, Margin = new Padding(0, 4, 0, 2) };
+            _toolTip.SetToolTip(_rbSourceNone, "変調器のRF出力のみ(ChannelStartだけ)。実際の映像/音声は乗せない。");
+
+            _rbSourceCapture = new RadioButton { Text = "デスクトップキャプチャ（実際の画面を送出）", AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
+            _toolTip.SetToolTip(_rbSourceCapture,
+                "実際にデスクトップ画面をキャプチャして送出内容として乗せる" +
+                "(tools/custom_sender の RunFullPipelineTest と同じ経路、動作実証済み)。");
+
+            var urlRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0, 2, 0, 4) };
+            _rbSourceUrl = new RadioButton { Text = "動画ファイル:", AutoSize = true, Anchor = AnchorStyles.Left };
+            _txtUrlPath = new TextBox { Width = 320, Anchor = AnchorStyles.Left, Margin = new Padding(4, 3, 4, 3) };
+            _btnBrowseUrl = new Button { Text = "参照...", Width = 70, Anchor = AnchorStyles.Left };
+            _btnBrowseUrl.Click += BtnBrowseUrl_Click;
+            _toolTip.SetToolTip(_rbSourceUrl,
+                "指定した動画/TSファイルを実際に送出する(SourceUrl)。2026-07-26に再検証して動作確認済み" +
+                "(以前はContent取得の実装ミスで断念していた)。");
+            urlRow.Controls.Add(_rbSourceUrl);
+            urlRow.Controls.Add(_txtUrlPath);
+            urlRow.Controls.Add(_btnBrowseUrl);
+
+            sourceLayout.Controls.Add(_rbSourceNone, 0, 0);
+            sourceLayout.Controls.Add(_rbSourceCapture, 0, 1);
+            sourceLayout.Controls.Add(urlRow, 0, 2);
+            sourceGroup.Controls.Add(sourceLayout);
 
             var logLabel = new Label { Dock = DockStyle.Top, Height = 22, Text = "ログ:", Padding = new Padding(8, 6, 0, 0) };
 
@@ -200,7 +230,7 @@ namespace XHeadSender
             Controls.Add(logLabel);
             Controls.Add(powerGroup);
             Controls.Add(modGroup);
-            Controls.Add(capPanel);
+            Controls.Add(sourceGroup);
             Controls.Add(btnPanel);
             Controls.Add(_lblStatus);
             Controls.Add(warnLabel);
@@ -293,12 +323,35 @@ namespace XHeadSender
             }
         }
 
+        private void SetSourceControlsEnabled(bool enabled)
+        {
+            _rbSourceNone.Enabled = enabled;
+            _rbSourceCapture.Enabled = enabled;
+            _rbSourceUrl.Enabled = enabled;
+            _txtUrlPath.Enabled = enabled;
+            _btnBrowseUrl.Enabled = enabled;
+        }
+
+        private void BtnBrowseUrl_Click(object sender, EventArgs e)
+        {
+            using (var dlg = new OpenFileDialog { Filter = "TS/動画ファイル (*.ts;*.m2ts;*.mp4)|*.ts;*.m2ts;*.mp4|すべてのファイル (*.*)|*.*" })
+            {
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    _txtUrlPath.Text = dlg.FileName;
+                    _rbSourceUrl.Checked = true;
+                }
+            }
+        }
+
         private async void BtnStart_Click(object sender, EventArgs e)
         {
             _btnStart.Enabled = false;
-            _chkAttachCapture.Enabled = false;
+            SetSourceControlsEnabled(false);
             var cfg = ReadConfigFromForm();
-            bool attachCapture = _chkAttachCapture.Checked;
+            bool attachCapture = _rbSourceCapture.Checked;
+            bool attachUrl = _rbSourceUrl.Checked;
+            string urlPath = _txtUrlPath.Text;
             try
             {
                 await Task.Run(() =>
@@ -308,25 +361,30 @@ namespace XHeadSender
                     {
                         _session.StartCaptureSource();
                     }
+                    else if (attachUrl)
+                    {
+                        _session.StartUrlSource(urlPath);
+                    }
                 });
-                SetStatus(attachCapture ? "送出中（デスクトップキャプチャ添付）" : "送出中（RFのみ）", Color.SeaGreen);
+                string label = attachCapture ? "送出中（デスクトップキャプチャ添付）" : attachUrl ? "送出中（動画ファイル添付）" : "送出中（RFのみ）";
+                SetStatus(label, Color.SeaGreen);
                 _btnStop.Enabled = true;
             }
             catch (Exception ex)
             {
                 Console.WriteLine("送出開始失敗: " + ex.Message);
-                // ChannelStartだけ成功してCaptureSource側で失敗した場合、RFは出続けているので
+                // ChannelStartだけ成功してソース添付側で失敗した場合、RFは出続けているので
                 // 「送出失敗」ではなく実情に合わせた表示にする。
                 if (_session.ChannelStarted)
                 {
-                    SetStatus("送出中（キャプチャ添付失敗、RFのみ）", Color.DarkOrange);
+                    SetStatus("送出中（ソース添付失敗、RFのみ）", Color.DarkOrange);
                     _btnStop.Enabled = true;
                 }
                 else
                 {
                     SetStatus("接続済み（送出失敗）", Color.Firebrick);
                     _btnStart.Enabled = true;
-                    _chkAttachCapture.Enabled = true;
+                    SetSourceControlsEnabled(true);
                 }
             }
         }
@@ -346,7 +404,7 @@ namespace XHeadSender
             {
                 SetStatus("接続済み（送出停止中）", Color.SteelBlue);
                 _btnStart.Enabled = true;
-                _chkAttachCapture.Enabled = true;
+                SetSourceControlsEnabled(true);
             }
         }
 
@@ -367,7 +425,7 @@ namespace XHeadSender
             {
                 SetStatus("未接続", Color.DimGray);
                 _btnConnect.Enabled = true;
-                _chkAttachCapture.Enabled = true;
+                SetSourceControlsEnabled(true);
             }
         }
 
