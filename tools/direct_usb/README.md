@@ -19,6 +19,7 @@ XHeadDirectUsb.exe --configure                  # CmdChannelStart相当のフル
 XHeadDirectUsb.exe --configure --freq 473000 --constellation 1 --bandwidth 6 \
     --fft 1 --coderate 3 --guardinterval 1 --timeinterleave 3 --dacgain -10
 XHeadDirectUsb.exe --stream --seconds 3          # --configure相当 + バルクOUTでnull-TSを指定秒数送出
+XHeadDirectUsb.exe --stop                        # 送出停止（0x0600=0x2000、RTL-SDRで停止を実測確認済み）
 ```
 
 - 既定（引数なし）では、確定済み・未確定のレジスタアドレス一覧を1つずつ読み取るだけの
@@ -30,6 +31,9 @@ XHeadDirectUsb.exe --stream --seconds 3          # --configure相当 + バルク
   `--freq`(kHz)・`--constellation`・`--bandwidth`・`--fft`・`--coderate`・
   `--guardinterval`・`--timeinterleave`・`--dacgain`で上書き可能、省略時は
   custom_senderで動作実績のある安全な既定値（QPSK/473000kHz/DACGain=-10等）を使う。
+- `--stop`は`0x0600=0x2000`（`mnservice.exe`の`CmdChannelStop`で観測される値、続報9・15参照）
+  を単体送信する。`--configure`で開始したRF送出を実際に止められることをRTL-SDRで確認済み
+  （送出中+38dB前後→停止後は+7〜9dB程度のノイズフロアまで低下、2026-07-26）。
 
 ## プロトコル実装
 
@@ -231,5 +235,5 @@ RF出力の停止を確認できた**（+44dBの明確なプラトーから、�
 このロジックは`tools/custom_sender`のGUI（`DirectUsbSession.cs`）に統合済み——GUIの
 「接続方式」トグルで「直接USB」を選ぶと、`mnservice.exe`を一切経由せずWinUSB直接で
 変調パラメータ+RF電力設定を送出できる（対応範囲はレジスタで表現できるものに限られ、
-Source添付・チャンネル/番組メタデータは非対応）。本ツール(`XHeadDirectUsb.exe`)自体には
-まだ`--stop`相当のコマンドラインオプションを追加していない（今後の課題）。
+Source添付・チャンネル/番組メタデータは非対応）。本ツール(`XHeadDirectUsb.exe`)自体にも
+`--stop`を追加済み（`RunStopSequence`）——単体で送出開始・停止の両方が完結する。

@@ -47,6 +47,7 @@ namespace XHeadDirectUsb
             bool writeMode = false;
             bool configureMode = false;
             bool streamMode = false;
+            bool stopMode = false;
             ushort? writeAddr = null;
             uint? writeData = null;
 
@@ -67,6 +68,7 @@ namespace XHeadDirectUsb
                 else if (args[i] == "--data") writeData = Convert.ToUInt32(args[++i], 16);
                 else if (args[i] == "--configure") configureMode = true;
                 else if (args[i] == "--stream") streamMode = true;
+                else if (args[i] == "--stop") stopMode = true;
                 else if (args[i] == "--seconds") streamSeconds = Convert.ToInt32(args[++i]);
                 else if (args[i] == "--freq") freqKHz = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--constellation") constellation = Convert.ToUInt32(args[++i]);
@@ -82,6 +84,7 @@ namespace XHeadDirectUsb
             Console.WriteLine(writeMode ? "Mode: WRITE (explicit --write given)" :
                 streamMode ? "Mode: CONFIGURE + STREAM (bulk-OUT null-TS payload after full ChannelStart replay)" :
                 configureMode ? "Mode: CONFIGURE (full ChannelStart write-sequence replay, bypasses mnservice.exe entirely)" :
+                stopMode ? "Mode: STOP (send the ChannelStop-equivalent teardown register write)" :
                 "Mode: READ-ONLY (default, safe)");
             Console.Out.Flush();
 
@@ -102,6 +105,10 @@ namespace XHeadDirectUsb
                 else if (configureMode)
                 {
                     RunConfigureSequence(freqKHz, constellation, bandwidth, fft, coderate, guardinterval, timeinterleave, dacgain);
+                }
+                else if (stopMode)
+                {
+                    RunStopSequence();
                 }
                 else if (writeMode)
                 {
@@ -271,6 +278,26 @@ namespace XHeadDirectUsb
                 Console.Out.Flush();
                 Thread.Sleep(20);
             }
+        }
+
+        /// <summary>
+        /// 2026-07-26: mnservice.exe's CmdChannelStop was observed to write 0x0600=0x2000
+        /// (docs/protocol/modulation_capabilities.md "続報9" register-lifecycle table labeled it
+        /// "ChannelStop/teardown"). Sent standalone via tools/custom_sender's DirectUsbSession and
+        /// confirmed via RTL-SDR that it actually cuts RF output (docs/protocol/
+        /// modulation_capabilities.md "続報15" -- +44dB active plateau dropped to noise-floor
+        /// level afterward). This is the CLI counterpart of that same single write, so
+        /// --configure's RF output can be turned off without needing custom_sender's GUI.
+        /// </summary>
+        private static void RunStopSequence()
+        {
+            Console.WriteLine("  0x0600 <= 0x00002000   (ChannelStop/teardown, confirmed via RTL-SDR to cut RF output)");
+            Console.Out.Flush();
+            SetAddress(0x0600);
+            Thread.Sleep(20);
+            WriteRegister(0x2000);
+            Thread.Sleep(20);
+            Console.WriteLine("  Stop command sent.");
         }
 
         /// <summary>
