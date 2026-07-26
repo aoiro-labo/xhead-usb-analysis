@@ -399,15 +399,14 @@ Bandwidth/FFT/CodeRateマーカーテストで確認済みの標準シーケン�
 TS多重化・PSI/SI生成に関わるソフトウェア側のパラメータであり、RF変調そのものを担う
 ハードウェア（`mhal_modulation.cc`が触るレジスタ群）には無関係、という解釈が自然。
 
-**【2026-07-26追記・重要】この「安全」という結論は`RegionID`単体に限定して読むこと。**
-同日後半、`mMTSChannelParam`の別フィールド`BroadcasterID`を(既存値と同一の値へのno-op
-書き込みも含め)明示的に設定するテストで、`ChannelStart`が`mnservice.exe`をサービス全体
-ごとハングさせる重大な問題を発見した（`docs/protocol/modulation_capabilities.md`
-「続報14」）。`mMTSChannelParam`/`mMTSProgramParam`の複数のフィールド組み合わせが軒並み
-同じハングを再現しており、同じstruct内でもフィールドによって安全性が異なる可能性がある
-（あるいはこの`RegionID`単体テスト以降に`mnservice.exe`側の状態/バージョンが変わった
-可能性も否定できない）。**このグループのフィールドを新たに触る場合は、`RegionID`に限らず
-必ず個別に安全性を再確認すること**——「続報8」の結論を無条件に他フィールドへ拡張しない。
+**【2026-07-26追記→さらに訂正】** 同日後半、`mMTSChannelParam`の別フィールド`BroadcasterID`
+を明示的に設定するテストで`ChannelStart`が`mnservice.exe`をハングさせる問題を発見し
+（`docs/protocol/modulation_capabilities.md`「続報14」）、一時的にこの「安全」という結論に
+疑いを持ったが、**同日夜にさらに検証した結果、そのハングはプロパティ/フィールドの問題では
+なく、長時間の強制終了・生レジスタ操作の繰り返しによるUSB接続そのものの劣化が原因**だと
+判明した（物理的な抜き差し1回で解消、詳細は同ファイル「続報14」の訂正追記を参照）。
+この`RegionID`単体テストの「安全」という結論は変わらず有効——`mMTSChannelParam`グループの
+フィールドを触ること自体は問題ない。
 
 これにより、残っている未解読アドレス（`0x0600`台の一部・`0x0629`・`0x0640`台・`0x0680`台）
 が`mMTSChannelParam`/`mPSEncodeParam`由来という当初の予想は**否定された**——少なくとも

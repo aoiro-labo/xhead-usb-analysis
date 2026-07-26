@@ -150,21 +150,27 @@ namespace XHeadSender
                 Program.SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 1, v => v.IntVal = cfg.PAGain);
                 Program.SetPropertyValue(channelStartProps, "mPSRFPowerAdjust", 2, v => v.IntVal = cfg.DACGain);
 
-                // 2026-07-26: チャンネル/番組メタデータ(mMTSChannelParam/mMTSProgramParam)の上書きは
-                // 意図的に一切行わない -- ChannelOpenが返す既定値のまま完全に素通しする。実装直後の
-                // ライブテストで、この2グループのどのフィールドを明示的にSetPropertyValueしても
-                // (RegionID/BroadcasterID/RemoteControlKeyID/NetworkName/TSName/ServiceNo/CopyFlag/
-                // ServiceNameのどれを試しても、既存値と同一の値へのno-op書き込みでも)
-                // `ChannelStart`がgRPCの10秒デッドラインを超過してハングし、以降サービス全体が
-                // 新規リクエストを一切受け付けなくなる(`wait service timeout`)ことを確認済み
-                // (`tools/custom_sender --meta <subset>`で再現・記録、
-                // docs/protocol/modulation_capabilities.md「続報14」)。実機USBハードウェア自体は
-                // 毎回`direct_usb`の読み取り専用スキャンで健全と確認しており、この2グループへの
-                // 明示的な値変更が安全に行える状態になるまでは絶対に手を出さないこと。
+                // チャンネル/番組メタデータ (Spec=ARIB_STD_B10 前提 -- ChannelOpenの既定値も常に
+                // このSpecで返ってくるため、他Specのフィールドは触らない)。2026-07-26に一度
+                // 「どのフィールドを触ってもChannelStartがハングする」問題を検出し撤去したが、
+                // 実機USB接続の劣化(長時間の強制終了・生レジスタ操作の繰り返しが原因)による
+                // ものと判明し、物理的な抜き差しで解消・再検証済み
+                // (docs/protocol/modulation_capabilities.md「続報14」)。
+                Program.SetPropertyValue(channelStartProps, "mMTSChannelParam", 4, v => v.UintVal = cfg.RegionID);
+                Program.SetPropertyValue(channelStartProps, "mMTSChannelParam", 5, v => v.UintVal = cfg.BroadcasterID);
+                Program.SetPropertyValue(channelStartProps, "mMTSChannelParam", 6, v => v.UintVal = cfg.RemoteControlKeyID);
+                Program.SetPropertyValue(channelStartProps, "mMTSChannelParam", 7, v => v.StrVal = cfg.NetworkName ?? "");
+                Program.SetPropertyValue(channelStartProps, "mMTSChannelParam", 8, v => v.StrVal = cfg.TSName ?? "");
+                Program.SetPropertyValue(channelStartProps, "mMTSProgramParam", 8, v => v.UintVal = cfg.ServiceNo);
+                Program.SetPropertyValue(channelStartProps, "mMTSProgramParam", 11, v => v.IntVal = cfg.CopyFlag);
+                Program.SetPropertyValue(channelStartProps, "mMTSProgramParam", 12, v => v.StrVal = cfg.ServiceName ?? "");
 
                 Console.WriteLine($"[GUI] ChannelStart: Frequency={cfg.Frequency}kHz Constellation={cfg.Constellation} " +
                     $"Bandwidth={cfg.Bandwidth} FFT={cfg.FFT} CodeRate={cfg.CodeRate} GuardInterval={cfg.GuardInterval} " +
                     $"TimeInterleavce={cfg.TimeInterleavce} Level={cfg.Level} PAGain={cfg.PAGain} DACGain={cfg.DACGain}");
+                Console.WriteLine($"[GUI] Channel/Program: NetworkName={cfg.NetworkName} TSName={cfg.TSName} " +
+                    $"RegionID={cfg.RegionID} BroadcasterID={cfg.BroadcasterID} RemoteControlKeyID={cfg.RemoteControlKeyID} " +
+                    $"ServiceNo={cfg.ServiceNo} ServiceName={cfg.ServiceName} CopyFlag={cfg.CopyFlag}");
 
                 var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = _msClient.HandleID, HandleID = _chHandle };
                 startReq.Properties.AddRange(channelStartProps);

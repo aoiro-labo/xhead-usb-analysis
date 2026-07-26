@@ -47,6 +47,14 @@ namespace XHeadSender
         private NumericUpDown _numLevel;
         private NumericUpDown _numPAGain;
         private NumericUpDown _numDACGain;
+        private TextBox _txtNetworkName;
+        private TextBox _txtTSName;
+        private TextBox _txtServiceName;
+        private NumericUpDown _numRegionID;
+        private NumericUpDown _numBroadcasterID;
+        private NumericUpDown _numRemoteControlKeyID;
+        private NumericUpDown _numServiceNo;
+        private ComboBox _cmbCopyFlag;
         private TextBox _txtLog;
 
         public MainForm()
@@ -134,13 +142,28 @@ namespace XHeadSender
             sourceLayout.Controls.Add(_rbSourceCapture, 0, 1);
             sourceLayout.Controls.Add(urlRow, 0, 2);
 
-            // 2026-07-26: チャンネル/番組メタデータ(mMTSChannelParam/mMTSProgramParam)を編集する
-            // タブを一度実装したが、ライブテストでどのフィールドを明示的に上書きしても
-            // (既存値と同一のno-op書き込みですら)ChannelStartがmnservice.exe全体をハングさせる
-            // ことが判明し、安全に動作させられないため撤去した。詳細は
-            // docs/protocol/modulation_capabilities.md「続報14」、GuiSession.StartChannel()の
-            // コメントを参照。復活させる場合は、まずCLIの`--meta <subset>`で個々のフィールドが
-            // 安全であることを確認してから。
+            var metaLayout = NewParamTable();
+            metaLayout.Padding = new Padding(10, 10, 6, 10);
+            _txtServiceName = AddTextBox(metaLayout, "サービス名 (チャンネル名)", "VAT-01", 16,
+                "受信機のチャンネル一覧・EPGに表示される名前。実受信機での見え方を確認する際はここを変える。");
+            _txtNetworkName = AddTextBox(metaLayout, "ネットワーク名", "VAT-01", 16,
+                "所属ネットワーク名(mMTSChannelParam.NetworkName)。");
+            _txtTSName = AddTextBox(metaLayout, "TS名", "VAT-01", 16,
+                "トランスポートストリーム名(mMTSChannelParam.TSName)。");
+            _numRegionID = AddNumeric(metaLayout, "地域識別 (RegionID)", 0, 63, 23,
+                "ARIB STD-B10の県域識別番号。既定23は動作実績のある値(実際の地域コードとは対応していない可能性がある)。");
+            _numBroadcasterID = AddNumeric(metaLayout, "放送事業者ID", 0, 15, 1,
+                "mMTSChannelParam.BroadcasterID。");
+            _numRemoteControlKeyID = AddNumeric(metaLayout, "リモコン番号", 0, 12, 1,
+                "実受信機のリモコンの数字キーに割り当てられるチャンネル番号。");
+            _numServiceNo = AddNumeric(metaLayout, "サービス番号", 0, 8, 1,
+                "mMTSProgramParam.ServiceNo。");
+            _cmbCopyFlag = AddCombo(metaLayout, "コピー制御", new[]
+            {
+                new ComboItem(0, "Free (既定)"),
+                new ComboItem(2, "CopyOnce"),
+                new ComboItem(3, "Forbidden"),
+            }, 0, "コピー制御記述子(mMTSProgramParam.CopyFlag)。");
 
             var modLayout = NewParamTable();
             modLayout.Padding = new Padding(10, 10, 6, 4);
@@ -212,11 +235,15 @@ namespace XHeadSender
             modTab.Controls.Add(powerHeader);
             modTab.Controls.Add(modLayout);
 
+            var metaTab = new TabPage("チャンネル/番組情報") { AutoScroll = true };
+            metaTab.Controls.Add(metaLayout);
+
             var sourceTab = new TabPage("ソース") { AutoScroll = true };
             sourceTab.Controls.Add(sourceLayout);
 
             var tabControl = new TabControl { Dock = DockStyle.Fill };
             tabControl.TabPages.Add(sourceTab);
+            tabControl.TabPages.Add(metaTab);
             tabControl.TabPages.Add(modTab);
 
             var logLabel = new Label { Dock = DockStyle.Top, Height = 22, Text = "ログ:", Padding = new Padding(8, 6, 0, 0) };
@@ -288,6 +315,20 @@ namespace XHeadSender
             return cmb;
         }
 
+        private TextBox AddTextBox(TableLayoutPanel layout, string label, string value, int maxLength, string tooltip)
+        {
+            int row = layout.RowStyles.Count;
+            layout.RowCount = row + 1;
+            var lbl = new Label { Text = label, Anchor = AnchorStyles.Left, AutoSize = true, Padding = new Padding(0, 6, 4, 0) };
+            layout.Controls.Add(lbl, 0, row);
+            var txt = new TextBox { Text = value, MaxLength = maxLength, Width = 110, Anchor = AnchorStyles.Left };
+            layout.Controls.Add(txt, 1, row);
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _toolTip.SetToolTip(lbl, tooltip);
+            _toolTip.SetToolTip(txt, tooltip);
+            return txt;
+        }
+
         private static int SelectedValue(ComboBox cmb) => ((ComboItem)cmb.SelectedItem).Value;
 
         private ModulationConfig ReadConfigFromForm()
@@ -304,6 +345,14 @@ namespace XHeadSender
                 Level = (uint)_numLevel.Value,
                 PAGain = (int)_numPAGain.Value,
                 DACGain = (int)_numDACGain.Value,
+                RegionID = (uint)_numRegionID.Value,
+                BroadcasterID = (uint)_numBroadcasterID.Value,
+                RemoteControlKeyID = (uint)_numRemoteControlKeyID.Value,
+                NetworkName = _txtNetworkName.Text,
+                TSName = _txtTSName.Text,
+                ServiceNo = (uint)_numServiceNo.Value,
+                ServiceName = _txtServiceName.Text,
+                CopyFlag = SelectedValue(_cmbCopyFlag),
             };
         }
 
