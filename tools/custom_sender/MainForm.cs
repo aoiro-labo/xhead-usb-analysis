@@ -51,6 +51,8 @@ namespace XHeadSender
         private ComboBox _cmbCodeRate;
         private ComboBox _cmbGuardInterval;
         private ComboBox _cmbTimeInterleavce;
+        private ComboBox _cmbCarrier;
+        private ComboBox _cmbFrame;
         private NumericUpDown _numLevel;
         private NumericUpDown _numPAGain;
         private NumericUpDown _numDACGain;
@@ -413,13 +415,17 @@ namespace XHeadSender
                 new ComboItem(0, "DVB_T"),
                 new ComboItem(2, "ATSC"),
                 new ComboItem(3, "J83B"),
+                new ComboItem(4, "DTMB（注意）"),
                 new ComboItem(5, "ISDB_T (既定)"),
-            }, 3, "変調方式のMode切替(続報12・13・19)。「直接USB」接続方式でのみ有効 -- " +
-                "mnservice.exe経由バックエンドはISDB_T固定。ここに出ている4つは実機で安全に" +
-                "送出できると確認済みのModeのみ(DTMB/J83Cはmnservice.exe自体をハングさせる" +
-                "既知のバグがあり、J83A/DVB_T2は実機での生レジスタ挙動が未検証のため、" +
-                "GUIには意図的に出していない -- tools/direct_usb --mode の --force-untested-mode " +
-                "を使えばCLIからは試せる)。");
+                new ComboItem(6, "J83C（注意）"),
+            }, 4, "変調方式のMode切替(続報12・13・19・22)。「直接USB」接続方式でのみ有効 -- " +
+                "mnservice.exe経由バックエンドはISDB_T固定。ここに出ている6つは実機で安全に" +
+                "送出できると確認済みのModeのみ。DTMB/J83Cは「直接USB」バックエンドでは正常に" +
+                "動作するが、mnservice.exe経由（「mnservice.exe経由」バックエンド選択時）だと" +
+                "サービス全体をハングさせる既知のバグがあるため、そちらでは絶対に選ばないこと" +
+                "(そもそもMode切替はmnservice.exe経由バックエンドでは無効化されている)。" +
+                "J83A/DVB_T2は実機での生レジスタ挙動が未検証のためGUIには意図的に出していない " +
+                "-- tools/direct_usb --mode の --force-untested-mode を使えばCLIからは試せる。");
             _cmbMode.SelectedIndexChanged += ModeChanged;
             _cmbConstellation = AddCombo(modLayout, "変調方式", new[]
             {
@@ -456,7 +462,19 @@ namespace XHeadSender
                 new ComboItem(1, "モード1"),
                 new ComboItem(2, "モード2"),
                 new ComboItem(3, "モード3 (既定)"),
-            }, 2, "時間インターリーブの深さ。深いほどバースト誤りに強いが遅延が増える。");
+            }, 2, "時間インターリーブの深さ(ISDB_T)。DTMB選択時はInterleave(TI_240/TI_720)として" +
+                "流用される。深いほどバースト誤りに強いが遅延が増える。");
+            _cmbCarrier = AddCombo(modLayout, "Carrier（DTMB専用）", new[]
+            {
+                new ComboItem(0, "CARRIER_3780 (既定)"),
+                new ComboItem(1, "CARRIER_1"),
+            }, 0, "DTMB専用のキャリア方式。DTMB以外のModeでは無効。");
+            _cmbFrame = AddCombo(modLayout, "Frame（DTMB専用）", new[]
+            {
+                new ComboItem(0, "FRAME_420"),
+                new ComboItem(1, "FRAME_945 (既定)"),
+                new ComboItem(2, "FRAME_595"),
+            }, 1, "DTMB専用のフレーム構成。DTMB以外のModeでは無効。");
 
             // RF電力設定は変調パラメータと同じタブにまとめる(どちらもRF/OFDM物理層の設定なので)。
             // 区切りを分かるよう小見出しラベルを挟む。
@@ -636,6 +654,8 @@ namespace XHeadSender
                 CodeRate = SelectedValue(_cmbCodeRate),
                 GuardInterval = SelectedValue(_cmbGuardInterval),
                 TimeInterleavce = SelectedValue(_cmbTimeInterleavce),
+                Carrier = (uint)SelectedValue(_cmbCarrier),
+                Frame = (uint)SelectedValue(_cmbFrame),
                 Level = (uint)_numLevel.Value,
                 PAGain = (int)_numPAGain.Value,
                 DACGain = (int)_numDACGain.Value,
@@ -743,11 +763,11 @@ namespace XHeadSender
         }
 
         /// <summary>
-        /// 続報19: Mode(直接USB専用)を切り替えたら、変調方式(Constellation)の選択肢と、
+        /// 続報19・22: Mode(直接USB専用)を切り替えたら、変調方式(Constellation)の選択肢と、
         /// そのModeが実際に使わないフィールド(Bandwidth/FFT/CodeRate/GuardInterval/
-        /// TimeInterleavce)の有効/無効を実機ネイティブキャプチャの結果に合わせて更新する
-        /// (docs/protocol/modulation_capabilities.md「続報19」-- ATSC/J83BはConstellationのみ、
-        /// DVB_TはTimeInterleavceを持たない)。
+        /// TimeInterleavce/Carrier/Frame)の有効/無効を実機ネイティブキャプチャの結果に合わせて
+        /// 更新する(docs/protocol/modulation_capabilities.md「続報19・22」-- ATSC/J83B/J83Cは
+        /// Constellationのみ、DVB_TはTimeInterleavceを持たない、DTMBは独自のフィールド構成)。
         /// </summary>
         private void ModeChanged(object sender, EventArgs e)
         {
@@ -768,6 +788,15 @@ namespace XHeadSender
                     items = new[] { new ComboItem(1, "64QAM (既定)"), new ComboItem(3, "256QAM") };
                     selectedIndex = 0;
                     break;
+                case 4: // DTMB
+                    items = new[] { new ComboItem(0, "QPSK"), new ComboItem(1, "16QAM"), new ComboItem(2, "64QAM (既定)"),
+                        new ComboItem(3, "QAM4_NR"), new ComboItem(4, "32QAM") };
+                    selectedIndex = 2;
+                    break;
+                case 6: // J83C
+                    items = new[] { new ComboItem(2, "64QAM (既定)"), new ComboItem(4, "256QAM") };
+                    selectedIndex = 0;
+                    break;
                 default: // 5 = ISDB_T
                     items = new[] { new ComboItem(0, "DQPSK"), new ComboItem(1, "QPSK (既定)"), new ComboItem(2, "16QAM"), new ComboItem(3, "64QAM") };
                     selectedIndex = 1;
@@ -779,11 +808,45 @@ namespace XHeadSender
 
             bool hasOfdmFields = mode == 0 || mode == 5;   // DVB_T, ISDB_T
             bool hasTimeInterleave = mode == 5;             // ISDB_T のみ
-            _numBandwidth.Enabled = hasOfdmFields;
+            bool isDtmb = mode == 4;
+            _numBandwidth.Enabled = hasOfdmFields || isDtmb;
             _cmbFFT.Enabled = hasOfdmFields;
-            _cmbCodeRate.Enabled = hasOfdmFields;
             _cmbGuardInterval.Enabled = hasOfdmFields;
-            _cmbTimeInterleavce.Enabled = hasTimeInterleave;
+            _cmbCarrier.Enabled = isDtmb;
+            _cmbFrame.Enabled = isDtmb;
+
+            if (isDtmb)
+            {
+                // DTMB専用のCodeRate(CR_0_4/0_6/0_8)・Interleave(TI_240/TI_720)選択肢に差し替える。
+                _cmbCodeRate.Items.Clear();
+                _cmbCodeRate.Items.Add(new ComboItem(0, "CR_0_4"));
+                _cmbCodeRate.Items.Add(new ComboItem(1, "CR_0_6"));
+                _cmbCodeRate.Items.Add(new ComboItem(2, "CR_0_8 (既定)"));
+                _cmbCodeRate.SelectedIndex = 2;
+                _cmbTimeInterleavce.Items.Clear();
+                _cmbTimeInterleavce.Items.Add(new ComboItem(2, "TI_240"));
+                _cmbTimeInterleavce.Items.Add(new ComboItem(3, "TI_720 (既定)"));
+                _cmbTimeInterleavce.SelectedIndex = 1;
+                _cmbCodeRate.Enabled = true;
+                _cmbTimeInterleavce.Enabled = true;
+            }
+            else
+            {
+                _cmbCodeRate.Items.Clear();
+                _cmbCodeRate.Items.Add(new ComboItem(0, "1/2"));
+                _cmbCodeRate.Items.Add(new ComboItem(1, "2/3"));
+                _cmbCodeRate.Items.Add(new ComboItem(2, "3/4"));
+                _cmbCodeRate.Items.Add(new ComboItem(3, "5/6 (既定)"));
+                _cmbCodeRate.Items.Add(new ComboItem(4, "7/8"));
+                _cmbCodeRate.SelectedIndex = 3;
+                _cmbTimeInterleavce.Items.Clear();
+                _cmbTimeInterleavce.Items.Add(new ComboItem(1, "モード1"));
+                _cmbTimeInterleavce.Items.Add(new ComboItem(2, "モード2"));
+                _cmbTimeInterleavce.Items.Add(new ComboItem(3, "モード3 (既定)"));
+                _cmbTimeInterleavce.SelectedIndex = 2;
+                _cmbCodeRate.Enabled = hasOfdmFields;
+                _cmbTimeInterleavce.Enabled = hasTimeInterleave;
+            }
         }
 
         private async void BtnConnect_Click(object sender, EventArgs e)

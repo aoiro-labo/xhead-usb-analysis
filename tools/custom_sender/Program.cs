@@ -363,11 +363,13 @@ namespace XHeadSender
             Console.WriteLine("=== Direct USB backend test (bypasses mnservice.exe entirely) === Mode=" + mode);
             var session = new DirectUsbSession();
             var cfg = new ModulationConfig { Mode = mode };
-            // Per-mode valid Constellation raw values (docs/protocol/modulation_capabilities.md 続報19):
+            // Per-mode valid Constellation raw values (docs/protocol/modulation_capabilities.md 続報19・22):
             // DVB_T needs its own QAM64=4 (ISDB_T's default 1=QPSK isn't in DVB_T's enum), ATSC only
             // accepts 0=_8VSB, J83B/ISDB_T both happen to accept the ModulationConfig default (1).
             if (mode == 0) cfg.Constellation = 4;
             else if (mode == 2) cfg.Constellation = 0;
+            else if (mode == 4) { cfg.Constellation = 2; cfg.Bandwidth = 8; cfg.CodeRate = 2; cfg.Carrier = 0; cfg.Frame = 1; cfg.TimeInterleavce = 3; }
+            else if (mode == 6) cfg.Constellation = 2;
             try
             {
                 session.Open();

@@ -10,9 +10,10 @@ namespace XHeadSender
     {
         public uint Frequency = 473000;      // FieldID=0, kHz, 宣言上0-1,000,000
         // Mode(FieldID=42)。GuiSession(mnservice.exe経由)は常にISDB_T(5)固定で使用、参照しない。
-        // DirectUsbSessionのみMode切替に対応(続報19): 0=DVB_T 2=ATSC 3=J83B 5=ISDB_T(既定)。
-        // 実機で安全と確認済みのこの4値のみGUIから選択可能(DTMB/J83Cはmnservice.exe自体を
-        // ハングさせる既知のバグ、J83A/DVB_T2は生レジスタでの実機挙動が未検証のため対象外)。
+        // DirectUsbSessionのみMode切替に対応(続報19・22): 0=DVB_T 2=ATSC 3=J83B 4=DTMB
+        // 5=ISDB_T(既定) 6=J83C。実機で安全と確認済みのこの6値のみGUIから選択可能
+        // (DTMB/J83Cはmnservice.exe経由だとハングするが、direct_usb単体なら安全と確認済み
+        // -- 続報22。J83A/DVB_T2は生レジスタでの実機挙動が未検証のため対象外)。
         public uint Mode = 5;
         public int Constellation = 1;        // FieldID=19, 0=DQPSK 1=QPSK 2=QAM16 3=QAM64
         public uint Bandwidth = 6;           // FieldID=20, MHz, 宣言上0-10
@@ -20,6 +21,9 @@ namespace XHeadSender
         public int CodeRate = 3;             // FieldID=22, 0=1/2 1=2/3 2=3/4 3=5/6 4=7/8
         public int GuardInterval = 1;        // FieldID=23, 0=1/32 1=1/16 2=1/8 3=1/4
         public int TimeInterleavce = 3;      // FieldID=24, 1=Mode1 2=Mode2 3=Mode3
+        // DTMB専用フィールド(続報22)。Carrier/FrameはDTMB以外のModeでは使われない。
+        public uint Carrier = 0;             // DTMB専用, 0=CARRIER_3780(既定) 1=CARRIER_1
+        public uint Frame = 1;               // DTMB専用, 0=FRAME_420 1=FRAME_945(既定) 2=FRAME_595
         public uint Level = 90;              // mPSRFPowerAdjust FieldID=0, 80-100
         public int PAGain = 2;               // mPSRFPowerAdjust FieldID=1, int8
         public int DACGain = -10;            // mPSRFPowerAdjust FieldID=2, int8

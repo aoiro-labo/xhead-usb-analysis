@@ -78,8 +78,12 @@ namespace XHeadSender
         /// あわせてATSC/J83Bは実機ネイティブキャプチャでConstellationしか書き込んでおらず、
         /// DVB_TはISDB_Tと違いTimeInterleavceを持たないことも確認済み -- cfg.Modeに応じて
         /// 書き込むフィールド集合をtools/direct_usb/Program.csのRunConfigureSequenceと
-        /// 同じ基準で切り替える。GUIの選択肢はcfg.Modeが実機で安全と確認済みの4値
-        /// (0=DVB_T/2=ATSC/3=J83B/5=ISDB_T)に限定しているため、それ以外の値は想定しない。
+        /// 同じ基準で切り替える。GUIの選択肢はcfg.Modeが実機で安全と確認済みの6値
+        /// (0=DVB_T/2=ATSC/3=J83B/4=DTMB/5=ISDB_T/6=J83C)に限定しているため、それ以外の値は
+        /// 想定しない。DTMB(続報22)は独自のフィールド構成(Constellation/Bandwidth/CodeRate/
+        /// Carrier/Frame/Interleave)を持ち、cdbで捕捉した実機ネイティブの書き込み順を
+        /// そのまま再現する(CodeRateとCarrierが同一レジスタ0x0692へ連続して書き込まれ、
+        /// Carrierの値で上書きされるという原因不明の挙動も含めて忠実に再現)。
         /// </summary>
         public void StartChannel(ModulationConfig cfg)
         {
@@ -92,10 +96,12 @@ namespace XHeadSender
 
             bool hasOfdmFields = cfg.Mode == 0 || cfg.Mode == 5;   // DVB_T, ISDB_T
             bool hasTimeInterleave = cfg.Mode == 5;                 // ISDB_T のみ
+            bool isDtmb = cfg.Mode == 4;
 
             Console.WriteLine($"[DirectUSB] ChannelStart: Mode={cfg.Mode} Frequency={cfg.Frequency}kHz Constellation={cfg.Constellation}" +
                 (hasOfdmFields ? $" Bandwidth={cfg.Bandwidth} FFT={cfg.FFT} CodeRate={cfg.CodeRate} GuardInterval={cfg.GuardInterval}" : "") +
                 (hasTimeInterleave ? $" TimeInterleavce={cfg.TimeInterleavce}" : "") +
+                (isDtmb ? $" Bandwidth={cfg.Bandwidth} CodeRate={cfg.CodeRate} Carrier={cfg.Carrier} Frame={cfg.Frame} Interleave={cfg.TimeInterleavce}" : "") +
                 $" DACGain={cfg.DACGain}");
 
             var seq = new System.Collections.Generic.List<(ushort addr, uint data)>
@@ -119,6 +125,14 @@ namespace XHeadSender
             if (hasTimeInterleave)
             {
                 seq.Add((0x0694, (uint)cfg.TimeInterleavce));
+            }
+            if (isDtmb)
+            {
+                seq.Add((0x0684, cfg.Bandwidth));
+                seq.Add((0x0692, (uint)cfg.CodeRate));  // 直後にCarrierで上書きされる(続報22)
+                seq.Add((0x0692, cfg.Carrier));
+                seq.Add((0x0694, cfg.Frame));
+                seq.Add((0x0691, (uint)cfg.TimeInterleavce)); // DTMBのInterleaveはTimeInterleavceフィールドを流用
             }
             seq.Add((0x0600, 1));
             seq.Add((0x1228, 0));

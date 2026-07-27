@@ -1417,6 +1417,27 @@ RF出力を確認した（1回目のみの偶然ではなく再現性を確認�
 RF実測データ: `tools/rtlsdr_analysis/rtlsdr_j83c_direct_scan1/2.csv`・
 `rtlsdr_dtmb_direct_scan1/2/3.csv`。
 
+### 続報23 (2026-07-27): DTMB・J83CのMode切替をGUIにも統合
+
+続報22の成果を`tools/custom_sender`のGUI「直接USB」バックエンドにも配線した。「Mode」
+コンボにDTMB・J83Cを追加（それぞれ「（注意）」の注記付き——mnservice.exe経由バックエンド
+ではMode切替自体が無効化されているため誤用の実害は無いが、ツールチップで明示）。DTMBは
+独自のフィールド構成のため、専用の「Carrier」「Frame」コンボを新設し、既存の
+「符号化率」「時間インターリーブ」コンボの選択肢をMode切替時にDTMB用（CR_0_4/0_6/0_8、
+TI_240/TI_720）へ動的に差し替えるロジックを追加した。`DirectUsbSession.StartChannel`も
+`tools/direct_usb`と同じDTMB書き込み列（`CodeRate`が`Carrier`に上書きされる挙動も含めて
+忠実に再現）に対応させた。
+
+**ライブ検証（事実）**: GUIの実際のバックエンドクラス(`DirectUsbSession`)を呼び出す
+`--directtest --mode 4/6`（既存のCLIテスト経路）で、`mnservice.exe`を停止した状態から
+DTMB・J83Cをそれぞれ実行し、RTL-SDRで両方とも実際のRF出力を確認した
+（DTMB +37.3dB・J83C +37.2dB、`tools/rtlsdr_analysis/rtlsdr_gui_dtmb_scan1.csv`・
+`rtlsdr_gui_j83c_scan1.csv`）。GUI自体もビルド成功・起動後のクラッシュなしを確認
+（タブ切替の視覚確認は続報20と同じ理由——`TCM_SETCURSEL`だけでは中身が追従しない
+既知の制約——で断念し、コードレビュー+実際のバックエンドクラスを使ったCLI機能検証で
+代替した）。`tools/direct_usb`自体の未検証Mode安全ゲートも、DTMB(4)/J83Cが検証済みに
+更新済み（続報22参照）。実機は終始`Get-PnpDevice`で`Status=OK`。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に
