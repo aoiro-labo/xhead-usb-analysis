@@ -1342,6 +1342,81 @@ GUIプロセス単体の問題）。実害はなかったが、二度と`WM_REFL
 これらは今回意図的に見送った。今後さらに「STUDIOパリティ」を追求する場合の次の
 候補として記録しておく。
 
+### 続報22 (2026-07-27): DTMB・J83Cが`mnservice.exe`経由だとハングする一方、`direct_usb`経由なら成功する——STUDIOを超える送出能力を実証
+
+ユーザーから「mnservice.exe経由だと失敗することを、mnservice.exeなしで実現できないか」という
+着想を得た。続報13で確立した「`DTMB`/`J83C`は`mnservice.exe`をサービスごとハングさせる」
+という事実は、あくまで**`mnservice.exe`というソフトウェア層を経由した場合の話**であり、
+このハングが実機ハードウェア側の問題ではなくソフトウェア側の待機ロジック（何らかの
+ハードウェア応答を待ち続けて返ってこない等）に起因するなら、`direct_usb`（そうした
+待機ロジックを一切持たない、レジスタへの一方向書き込みのみ）で同じMode値を直接叩けば
+ハングを回避できる可能性がある、という仮説を立てて検証した。
+
+**J83C（事実）**: `direct_usb`は既にJ83Cの正しいフィールド構成（Constellationのみ）を
+把握していたため、`--mode 6 --constellation 2 --force-untested-mode`で即座に試行できた。
+結果、**全29回の書き込みが正常完了、ハングは一切発生せず**、RTL-SDRスキャンでも
+473.6MHz付近に+38.5dBの明確なRF出力を実測した。`mnservice.exe`を一切経由しない
+`direct_usb`のみで、STUDIO・本ツールのmnservice.exe経由バックエンドのどちらでも
+不可能だったJ83C送出に成功した。
+
+**DTMB（事実、より複雑な経緯）**: DTMBは`Constellation`/`Bandwidth`/`CodeRate`/`Carrier`/
+`Frame`/`Interleave`という他モードと異なる独自のフィールド構成を持つため、正しいレジスタ
+アドレスを確認する必要があった。`tools/custom_sender --dtmb`を新規起動した`mnservice.exe`に
+対してcdb経由で再実行したところ——**予想に反して今回は`ChannelStart(DTMB)`がハングせず
+正常に成功した**（`Result=ResultSuccess`、`ChannelStop`/`ChannelClose`も正常完了、
+直後の`CmdConnect`でgRPCサービスの生存も確認）。続報13の「DTMB/J83Cは確実にハングする」
+という結論と一見矛盾するが、**同じ抜き差し後の実機で、続報13当時から半日以上・大量の
+レジスタレベル操作を経た状態での再検証**であり、続報14の「USB接続の劣化」パターンとは
+逆に「何らかの理由で今回はタイミング競合を回避できた」可能性がある（未確定、推測）。
+いずれにせよ、この成功した1回のライブキャプチャから、DTMBの正しいレジスタ書き込み列を
+確認できた:
+
+```
+0x0690 <= Constellation
+0x0684 <= Bandwidth
+0x0692 <= CodeRate   ← 直後に上書きされる
+0x0692 <= Carrier    ← 同一アドレスへの2回目の書き込み、CodeRateの値を上書き
+0x0694 <= Frame
+0x0691 <= Interleave
+```
+
+**重要な発見**: `CodeRate`と`Carrier`が**全く同じレジスタアドレス`0x0692`に連続して
+書き込まれており、後から書かれた`Carrier`の値が最終的に残る**（読み戻しでも`Carrier`の
+値のみ確認、`CodeRate`の書き込みは実質的に失われている）。これが`mnservice.exe`自身の
+フィールド→レジスタ対応表のバグなのか、意図した仕様なのかは不明——事実として観測された
+書き込み列をそのまま忠実に再現する方針を採った（推測で「正しい」形に補正しなかった）。
+
+**`direct_usb`への実装とライブ検証（事実）**: `--mode 4`（DTMB）に対応する専用の書き込み列を
+`RunConfigureSequence`に追加し（上記の観測順を正確に再現）、`--carrier`/`--frame`/
+`--interleave`引数を新設。`mnservice.exe`を完全に停止した状態で`--mode 4 --constellation 2
+--bandwidth 8 --coderate 2 --carrier 0 --frame 1 --interleave 3 --force-untested-mode`を
+**2回連続で実行**、両方ともハングなく完走し、RTL-SDRでそれぞれ+38.7dB・+39.4dBの
+RF出力を確認した（1回目のみの偶然ではなく再現性を確認済み）。J83Cと合わせて、
+`tools/direct_usb`の未検証Mode安全ゲートで`verifiedSafeModes[4]`(DTMB)・
+`verifiedSafeModes[6]`(J83C)を「検証済み（ただし`direct_usb`経由限定）」に更新した
+——`--force-untested-mode`なしで実行できるようになった。実機は全テストを通じて
+`Get-PnpDevice`で`Status=OK`のまま。
+
+**結論（事実+推測を明記）**:
+- **事実**: DTMB・J83Cはともに、`mnservice.exe`を一切経由しない`direct_usb`単体であれば、
+  ハングすることなく安定してRF出力まで到達する。`mnservice.exe`経由での既知のハング
+  （続報13）は、実機ハードウェア側の根本的な非対応ではなく、`mnservice.exe`自身の
+  ソフトウェア層（おそらくハードウェアからの応答を待ち続けるロジック、または上記で
+  発見したDTMBのレジスタ対応表バグに関連する何か）に起因する可能性が高いことが、
+  この結果によって裏付けられた。
+- **推測**: これは「STUDIO本体・その公式ソフトウェアスタックでは実現できないことを、
+  独自ツールで実現する」という、本プロジェクトが当初から掲げていた目標の中でも
+  最も明確な達成例のひとつ——mnservice.exeのバグ（またはSTUDIO自身が踏まない
+  コードパスの粗さ）を、ソフトウェア層を丸ごとバイパスすることで回避した。
+- 未確認: DTMB側の「CodeRateがCarrierに上書きされる」という現象が本当にmnservice.exeの
+  バグなのか、あるいはこの2つのフィールドが実際には同じ内部パラメータの表現違いに
+  過ぎないのか（そうであればCodeRateの値が失われても実害はない）は未確定。
+  ビットレベルでの規格準拠検証も他の全RFテストと同様に未実施。
+
+再現コード: `tools/direct_usb/Program.cs`の`RunConfigureSequence`（`--mode 4/6`）。
+RF実測データ: `tools/rtlsdr_analysis/rtlsdr_j83c_direct_scan1/2.csv`・
+`rtlsdr_dtmb_direct_scan1/2/3.csv`。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

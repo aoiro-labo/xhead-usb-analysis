@@ -339,3 +339,31 @@ XHeadDirectUsb.exe --configure --mode 3 --constellation 1 --dacgain -10 # J83B (
 これで「安全に成功する」と確認済みの3モード（DVB_T/ATSC/J83B）全てが、本ツール単体で
 `mnservice.exe`非依存の送出に対応した。`tools/custom_sender`のGUI「直接USB」バックエンド
 （`DirectUsbSession.cs`）はISDB_T専用のまま変更していない（Mode切替のGUI統合は未着手）。
+
+### 続報4 (2026-07-27): DTMB・J83C——`mnservice.exe`経由だとハングするモードが、本ツール単体だと成功する
+
+`docs/protocol/modulation_capabilities.md`「続報22」の詳細だが、要点をここにも記録する。
+続報13で確立した「`DTMB`/`J83C`は`mnservice.exe`をサービスごとハングさせる」という
+既知の問題は、`mnservice.exe`というソフトウェア層特有の問題である可能性を検証した。
+
+```
+XHeadDirectUsb.exe --configure --mode 6 --constellation 2 --force-untested-mode --dacgain -10  # J83C
+XHeadDirectUsb.exe --configure --mode 4 --constellation 2 --bandwidth 8 --coderate 2 \
+    --carrier 0 --frame 1 --interleave 3 --force-untested-mode --dacgain -10                    # DTMB
+```
+
+**結果**: J83C・DTMBともに`mnservice.exe`を一切経由しない状態では**ハングせず正常に完走**、
+RTL-SDRでそれぞれ+38.5dB・+38.7〜39.4dB（DTMBは2回実行して再現性確認済み）のRF出力を
+実測した。DTMBは他モードと異なる独自のフィールド構成（Constellation/Bandwidth/CodeRate/
+Carrier/Frame/Interleave）を持つため、`--carrier`/`--frame`/`--interleave`引数を新設し、
+cdbで捕捉した実機ネイティブの書き込み順を`RunConfigureSequence`に追加した——捕捉時に
+`CodeRate`と`Carrier`が同一レジスタ`0x0692`へ連続して書き込まれ、後勝ちで`Carrier`の値
+のみ残るという興味深い（原因不明の）挙動も見つかった。
+
+これにより、`--force-untested-mode`なしでMode 0/2/3/4/5/6（DVB_T/ATSC/J83B/DTMB/ISDB_T/J83C）
+の6モードが`direct_usb`単体で送出可能になった——**STUDIO本体・その公式ソフトウェアスタック
+（`mnservice.exe`）ではハングして実現できないモードを、独自ツールでのみ実現した**、本
+プロジェクトが当初から掲げていた「STUDIOを超える」という目標の明確な達成例。J83A(1)/
+DVB_T2(7)は`mnservice.exe`の**ソフトウェア検証**で拒否されていただけで実機に到達すら
+していないため、依然`--force-untested-mode`が必要（実機での生レジスタ挙動が本当に
+未知数のため）。
