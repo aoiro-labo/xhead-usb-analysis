@@ -367,3 +367,31 @@ cdbで捕捉した実機ネイティブの書き込み順を`RunConfigureSequenc
 DVB_T2(7)は`mnservice.exe`の**ソフトウェア検証**で拒否されていただけで実機に到達すら
 していないため、依然`--force-untested-mode`が必要（実機での生レジスタ挙動が本当に
 未知数のため）。
+
+### 続報5 (2026-07-27): J83AもGhidra静的解析に基づき成功——`--force-untested-mode`不要な7モードに
+
+`docs/protocol/modulation_capabilities.md`「続報24」の詳細だが、要点をここにも記録する。
+Ghidraで`mnservice.exe`の`"modulation param invalid"`エラー元を静的解析したところ、
+J83Aの拒否は実機の能力チェックではなく、**J83Aのプロパティ記述子がシンボルレート
+らしき値（5000〜7999の範囲）を設定する手段を公開していないために生じるソフトウェア側の
+制約**と判明した（DTMB/J83Cの「ソフトウェア層のハング」と同系統の「mnservice.exe実装の
+制約であって実機の限界ではない」パターン）。
+
+```
+XHeadDirectUsb.exe --configure --mode 1 --constellation 2 --force-untested-mode --dacgain -10  # J83A
+```
+
+J83Aはレジスタレベルでは「Constellationのみ」というATSC/J83B/J83Cと同じ構造のため、
+安全性を検討の上ライブ検証したところ、**2回連続でハングなく完走、RTL-SDRで
+それぞれ+44.2dB・+37.0dBの明確なRF出力を実測した**（単一キャリアQAMのため
+OFDMモードとはスペクトル形状が異なる狭いピーク状——J83Aの信号特性として自然）。
+`--force-untested-mode`なしで使える検証済みModeがこれで7つ（DVB_T/J83A/ATSC/J83B/
+DTMB/ISDB_T/J83C）になった——未検証のまま残るのはDVB_T2のみ。
+
+DVB_T2についても同じ静的解析を行ったが、こちらは`mmodulation_param.cc`という実
+ソースファイル・具体的な規格エラーメッセージ（`"PilotPattern not valid"`等）を
+持つ**正真正銘のDVB-T2規格準拠パラメータ組み合わせ検証**と判明し、J83Aのような
+単純な「設定手段の欠落」ではなかった。2種類の代替パラメータ組み合わせを
+`tools/custom_sender --dvbt2alt`で試したが、いずれも同じ`"modulation param invalid"`
+で拒否され、正しい組み合わせの特定には至らなかった（`mnservice.exe`は両回とも健全に
+生存、実害なし）——引き続き未解決事項として残す。

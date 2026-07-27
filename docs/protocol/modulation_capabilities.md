@@ -1438,6 +1438,83 @@ DTMB・J83Cをそれぞれ実行し、RTL-SDRで両方とも実際のRF出力を
 代替した）。`tools/direct_usb`自体の未検証Mode安全ゲートも、DTMB(4)/J83Cが検証済みに
 更新済み（続報22参照）。実機は終始`Get-PnpDevice`で`Status=OK`。
 
+### 続報24 (2026-07-27): 静的解析でJ83A・DVB_T2の拒否原因を特定——J83AもGhidra解析に基づきdirect_usbで成功、DVB_T2は規格準拠検証と判明（未解決）
+
+続報22の成果を受け、ユーザーから「他にも同じパターン（mnservice.exe経由だと失敗するが
+回避できる）が無いか探してほしい」という依頼があった。残る未検証2モード（J83A・DVB_T2）
+について、実機を一切使わない静的解析（Ghidra）で拒否の原因を先に特定してから、
+安全性を判断した上でライブテストする方針を採った。
+
+**静的解析（事実）**: `ChannelStart`が返す`"modulation param invalid"`という文字列を
+Ghidraで検索し、参照元関数（`FUN_14008d210`）をデコンパイルしたところ、このエラーは
+`FUN_1403943c0`という関数の戻り値が0の場合にのみ発生すると判明した。この関数を
+さらにデコンパイルしたところ、**`Mode`ごとに分岐し、各Modeの変調パラメータから
+理論ビットレートを計算する関数**であり、ハードウェア能力を直接チェックするコードでは
+ないと分かった（ATSC分岐が定数`0x127e826`=19,392,550≈19.39Mbps＝実際のATSC 8VSB
+ペイロードレートを返す、J83B分岐が`0x19b88f3`≈27.00Mbps／`0x2503451`≈38.81Mbps＝
+Annex B QAM64/256の実レートを返す等、規格上の実数値と一致することからも裏付けられる）。
+
+**J83A（事実）**: J83A分岐は`param_1[6]`という値が`5000`〜`7999`の範囲にあることを
+要求している——単位から見てシンボルレート（ksym/s）系の値と推測され、実在するJ83A
+シンボルレート（5.057〜6.875 Msym/s等）の範囲と整合する。**しかしJ83Aのプロパティ
+記述子（`docs/protocol/modulation_capabilities.md`で確認済み）はConstellation
+（FieldID=10）1個しか公開しておらず、このシンボルレート値をクライアントから設定する
+手段が存在しない**——`param_1[6]`は他Mode（ISDB_T/DVB_T/DTMBのBandwidth等）と共有する
+構造体スロットのはずで、J83Aへの切替時には前のModeの残留値（例えばISDB_Tの
+Bandwidth=6）がそのまま残り、5000〜7999の範囲に入らないため常に検証落ちしていたと
+考えられる。**これはハードウェア側の制約ではなく、`mnservice.exe`のプロトコル実装が
+J83A用のこのパラメータを設定する手段を用意し忘れている（または意図的に省略している）
+ことに起因する、ソフトウェア側の制約である可能性が高い**。
+
+**J83Aのライブ検証（事実）**: J83Aはレジスタレベルでは「Constellationのみ」という、
+既にdirect_usbで成功済みのATSC/J83B/J83Cと全く同じ構造を持つ。安全性を検討の上、
+`XHeadDirectUsb.exe --configure --mode 1 --constellation 2 --force-untested-mode`を
+2回連続実行したところ、**両方ともハングなく完走し、RTL-SDRでそれぞれ+44.2dB・+37.0dB
+の明確なRF出力を実測した**（単一キャリアQAMのため、他のOFDMモードと異なり狭い
+ピーク状のスペクトル形状——J83Aの信号特性として自然な違い）。実機は終始
+`Get-PnpDevice`で`Status=OK`。`tools/direct_usb`の未検証Mode安全ゲートも
+`verifiedSafeModes[1]`(J83A)を検証済みに更新し、これで7モード
+（DVB_T/J83A/ATSC/J83B/DTMB/ISDB_T/J83C）が`--force-untested-mode`なしで
+`direct_usb`から送出可能になった——未検証のまま残るのはDVB_T2のみ。
+
+**DVB_T2（未解決、事実+試行錯誤の記録）**: DVB_T2の追加ゲート関数
+（`FUN_140393c20`）は`mmodulation_param.cc`という実ソースファイル名・
+`"bad T2 bandwidth : %d"`／`"PilotPattern not valid with [%s:%s]"`／
+`"FEC Length and CodeRate not supported"`／`"ExtendCarrierMode not supported below
+8K FFT"`という具体的なエラーメッセージを持つ、**正真正銘のDVB-T2規格準拠検証**
+（FFT×PilotPattern×CodeRate×GuardInterval×FECの組み合わせが規格上有効かのチェック）
+と判明した——J83Aのような「パラメータを設定する手段がない」という単純な欠落ではない。
+デフォルト値の組み合わせ（PilotPattern=PP_7・FEC=FEC_16200等）が規格上ジョイントで
+無効な可能性を考え、`tools/custom_sender --dvbt2alt`という専用テストを新設し、
+(1) CodeRate/GuardInterval/PilotPattern/FECを実運用でより一般的な値の組み合わせに
+変更、(2) FECのみをFEC_64800に変更、の2パターンを試したが**どちらも同じ
+`"modulation param invalid"`で拒否された**（`mnservice.exe`は両回とも健全に
+生存、クリーンな拒否パターンを維持）。デコンパイル結果から`param_1`の各フィールドが
+具体的にどのDVB_T2パラメータ（FFT/CodeRate/PilotPattern等）に対応するかの
+オフセットマッピングは推測の域を出ておらず、正しい組み合わせの特定には
+（1）ルックアップテーブル（`DAT_1404ae0d0`等）のバイト単位での解読、または
+（2）実際のDVB-T2規格書（ETSI EN 302 755）の互換性表と突き合わせた体系的な
+試行錯誤が必要——今回はここで打ち切り、未解決事項として記録する。また、
+DVB_T2のレジスタレベルでの足跡（11フィールド分）はcdbで一度も捕捉されておらず、
+`direct_usb`側での代替手段も現時点では存在しない。
+
+**結論（事実と推測を明記）**:
+- **事実**: J83Aは`direct_usb`単体で安定してRF出力に成功する（2回再現確認済み）。
+  静的解析ベースで原因を特定してから安全にライブ検証するという手法が、DTMB/J83Cに
+  続いて3例目の成功——「mnservice.exe経由で失敗する＝実機ができない」ではないことが
+  改めて確認された。
+- **推測**: J83Aの根本原因（プロパティ記述子がシンボルレートを公開していない）は
+  `mnservice.exe`実装上の見落としである可能性が高いが、意図的な制限（例えば
+  J83A対応が名目上のみで実際には検証・保守されていない）という可能性も排除できない。
+- **事実**: DVB_T2の拒否は、J83Aとは性質が異なる**規格準拠のパラメータ組み合わせ
+  検証**であり、正しい組み合わせを見つければ`mnservice.exe`経由でも動作する可能性が
+  ある。ただし2回の試行はいずれも失敗し、現時点で正しい組み合わせは未特定。
+
+再現コード: `tools/direct_usb/Program.cs`の`--mode 1`、`tools/custom_sender/Program.cs`の
+`--dvbt2alt`。静的解析: `tools/native_analysis/ghidra_scripts/XHeadFindModeValidation.java`・
+`XHeadDecodeModeValidationHelper.java`・`XHeadDecodeDvbt2Gate.java`。
+RF実測データ: `tools/rtlsdr_analysis/rtlsdr_j83a_direct_scan1/2/3.csv`。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

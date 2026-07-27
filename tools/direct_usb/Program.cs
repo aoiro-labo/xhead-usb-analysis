@@ -99,15 +99,23 @@ namespace XHeadDirectUsb
                 // driven through the normal software stack (続報13), but bypassing that stack
                 // entirely (this tool) completes cleanly and produces real RF output, live-verified
                 // twice each. This strongly suggests the mnservice.exe hang is a software-side
-                // wait/race condition in its own DTMB/J83C handling, not a hardware-level lockup --
-                // still listed here as "verified" rather than default-allowed because the underlying
-                // hardware behavior for these two Modes is comparatively newer/less-tested than the
-                // other four. 1=J83A/7=DVB_T2 remain unverified -- they were only ever rejected by
-                // mnservice.exe's own software validation before reaching hardware at all, so their
-                // raw register behavior is genuinely unknown. Require an explicit opt-in before
-                // sending untested raw values to the modulator hardware.
+                // wait/race condition in its own DTMB/J83C handling, not a hardware-level lockup.
+                // 1=J83A is ALSO now verified RF-safe via direct_usb (続報24) -- Ghidra decompilation
+                // of mnservice.exe's own modulation-param validator showed J83A's "modulation param
+                // invalid" rejection is a software-side bitrate/symbol-rate calculation that needs a
+                // parameter J83A's property descriptor never exposes a way to set (unrelated to any
+                // hardware capability check), and J83A shares the same "Constellation only" register
+                // footprint as ATSC/J83B/J83C -- live-verified twice, real RF output both times.
+                // 7=DVB_T2 remains unverified: its rejection is confirmed (via the same decompilation)
+                // to be genuine DVB-T2 standard compatibility validation (FFT x PilotPattern x CodeRate
+                // x GuardInterval x FEC), not a missing-parameter gap like J83A -- two different
+                // alternate parameter combinations were tried via mnservice.exe and both were also
+                // rejected, so neither the correct spec-valid combination nor DVB_T2's raw register
+                // footprint (never captured -- 11 fields, none register-mapped) are known. Require an
+                // explicit opt-in before sending untested raw values to the modulator hardware.
                 bool[] verifiedSafeModes = new bool[8]; // index = Mode enum raw value
                 verifiedSafeModes[0] = true; // DVB_T
+                verifiedSafeModes[1] = true; // J83A (続報24, direct_usb only -- mnservice.exe rejects via software validation)
                 verifiedSafeModes[2] = true; // ATSC
                 verifiedSafeModes[3] = true; // J83B
                 verifiedSafeModes[4] = true; // DTMB (続報22, direct_usb only -- hangs via mnservice.exe)
@@ -116,8 +124,8 @@ namespace XHeadDirectUsb
                 if (mode >= (uint)verifiedSafeModes.Length || !verifiedSafeModes[mode])
                 {
                     Console.WriteLine($"REFUSING: --mode {mode} has not been verified against a real mnservice.exe " +
-                        "register capture, or (DTMB/J83C) against direct_usb itself. J83A(1)/DVB_T2(7) were only " +
-                        "ever rejected by mnservice.exe's own software validation before reaching hardware -- their " +
+                        "register capture, or (DTMB/J83C/J83A) against direct_usb itself. DVB_T2(7) was only " +
+                        "ever rejected by mnservice.exe's own software validation before reaching hardware -- its " +
                         "raw register behavior is genuinely unknown. Sending raw register writes for these Modes " +
                         "carries unknown hardware risk. Pass --force-untested-mode to override if you understand " +
                         "and accept this risk.");
