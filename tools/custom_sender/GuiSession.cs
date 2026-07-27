@@ -164,6 +164,8 @@ namespace XHeadSender
                 Program.SetPropertyValue(channelStartProps, "mMTSProgramParam", 8, v => v.UintVal = cfg.ServiceNo);
                 Program.SetPropertyValue(channelStartProps, "mMTSProgramParam", 11, v => v.IntVal = cfg.CopyFlag);
                 Program.SetPropertyValue(channelStartProps, "mMTSProgramParam", 12, v => v.StrVal = cfg.ServiceName ?? "");
+                Program.SetPropertyValue(channelStartProps, "mMTSProgramParam", 0, v => v.UintVal = cfg.PcrPid);
+                Program.SetPropertyValue(channelStartProps, "mMTSProgramParam", 1, v => v.UintVal = cfg.PmtPid);
 
                 // EPG (mEPGSimpleParam) -- STUDIOの「EPG設定」タブ相当。1件のみ・繰り返し配信という
                 // 制約はハードウェア/ファームウェア側の仕様(続報11で確認済み)。
@@ -193,6 +195,24 @@ namespace XHeadSender
                 Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 33, v => v.UintVal = cfg.GOPLength);
                 Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 37, v => v.StrVal = cfg.DebugFile ?? "");
                 Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 38, v => v.StrVal = cfg.BMLFile ?? "");
+
+                // 2026-07-27 (続報21): STUDIO本体の「コーデック設定」サブページで発見した詳細設定。
+                // FieldFlags型(先頭Functions・Quality.Functions)はビットORで組み立てる。
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 1, v => v.UintVal = cfg.EnableDebugFunction ? 1u : 0u);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 10, v => v.IntVal = cfg.VideoField);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 12, v => v.IntVal = cfg.VideoFormat);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 13, v => v.IntVal = cfg.ColorPrimaries);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 14, v => v.IntVal = cfg.TransferCharacteristics);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 15, v => v.IntVal = cfg.MatrixCoefficients);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 24, v => v.UintVal =
+                    (cfg.EnableDetechSceneChange ? 1u : 0u) | (cfg.EnableTwoPass ? 2u : 0u));
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 26, v => v.UintVal = cfg.BitrateRatio);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 27, v => v.UintVal = cfg.MinBitrateRatio);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 28, v => v.UintVal = cfg.MaxBitrateRatio);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 29, v => v.UintVal = cfg.BFrameCount);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 30, v => v.UintVal = cfg.QualityRatio);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 34, v => v.UintVal = cfg.GOPMinLength);
+                Program.SetPropertyValue(channelStartProps, "mPSEncodeParam", 35, v => v.UintVal = cfg.GOPMaxLength);
 
                 Console.WriteLine($"[GUI] ChannelStart: Frequency={cfg.Frequency}kHz Constellation={cfg.Constellation} " +
                     $"Bandwidth={cfg.Bandwidth} FFT={cfg.FFT} CodeRate={cfg.CodeRate} GuardInterval={cfg.GuardInterval} " +

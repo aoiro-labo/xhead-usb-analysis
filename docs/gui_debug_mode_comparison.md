@@ -44,6 +44,13 @@ TimeInterleavce, FieldID 19-24) と1対1で対応。
 `System.EnableAdvanceMode: true` が先に有効だったため、通常時から既に表示されていた
 （`EnableAdvanceMode`はDebugモードとは別の既存フラグ）。
 
+**【2026-07-27追記】** この「差分なし」という記述が、`docs/protocol/modulation_capabilities.md`
+続報16で「STUDIOのコーデック設定タブは空（何も無い）」と誤読されていたことが判明した。
+実際には上記の通り**通常時の時点で既にGOP詳細設定等が表示されていた**（`EnableAdvanceMode`が
+先に有効だったため）のであり、「差分なし」は「両方に既にある」の意味であって「両方とも空」
+ではなかった。実際にSTUDIO本体のGUIを操作してコーデック設定タブの全項目を確認・
+`tools/custom_sender`に実装した詳細は続報21を参照。
+
 ## 05. EPG設定
 
 | 通常時 | Debug有効時 |

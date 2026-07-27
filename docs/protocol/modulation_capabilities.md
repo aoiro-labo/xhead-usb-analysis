@@ -1063,6 +1063,12 @@ StopChannel→Close`が全てエラーなく完走し、RTL-SDRで473.6MHz付近
   で確認済みの通り、STUDIOの「コーデック設定」タブはDebugモード有効時でも「見た目上の
   差分なし」であり、STUDIOパリティという観点ではVIDEO_PID/AUDIO_PIDの2つで十分カバーできる
   （それ以外は本ツールが独自に踏み込んでいる範囲）。
+  **【2026-07-27追記・訂正】この段落の「コーデック設定タブは空」という前提は誤りだった。
+  実際にSTUDIO本体のGUIを操作したところ、これらのフィールドの大半（ColorPrimaries/
+  TransferCharacteristics/MatrixCoefficients/VideoFormat/Functions系フラグ/GOPMinLength・
+  MaxLength/MinBitrateRatio・MaxBitrateRatio/BFrameCount等）を含む詳細な「コーデック設定」
+  ページが実在し、`docs/gui_debug_mode_comparison.md`での比較が別のページ・別の状態を
+  見ていたことが判明した。訂正・追加実装の詳細は続報21を参照。**
 - **BMLFile**もこのタブに統合（`.xbml`ファイル選択ダイアログ付き）——続報9・11で解読した
   データ放送/字幕再注入の仕組みがGUIから直接使えるようになった。
 
@@ -1260,6 +1266,81 @@ GUIには設けていない）を追加し、選択に応じて:
 確認した: 「直接USB」選択→Mode=ATSC選択で、「変調方式」が「8VSB」のみに絞られ、
 Bandwidth/FFT/符号化率/ガードインターバル/時間インターリーブが正しくグレーアウトされる
 ことを確認済み。実機は終始`Get-PnpDevice`で`Status=OK`。
+
+### 続報21 (2026-07-27): 【訂正】STUDIO本体のGUIを一通り操作して発見——「コーデック設定タブは空」という続報16の記載は誤りだった
+
+「STUDIOでできることのすべてがまだこっちの送出ツールでできない」という指摘を受け、
+実際に`xhead_studio.exe`本体のGUIを起動し、`PrintWindow`（キャプチャ）と
+`SendMessage`によるネイティブメッセージ送信（`WM_LBUTTONDOWN`/`UP`——Guna.UI2ライブラリの
+カスタム描画コントロールは通常のBUTTONクラスではないため、`BM_CLICK`ではなくマウス
+イベントを模したメッセージが必要だった）で、実際のマウス操作を一切行わずに全設定ページを
+一通り確認した（手法の詳細は[[feedback-windows-gui-testing]]参照）。
+
+**訂正（重要）**: 続報16で「STUDIOの『コーデック設定』タブはDebugモード有効時でも
+『見た目上の差分なし』」と記録していたが、これは誤りだった。実際には「出力設定」の
+サブページに、これまで見ていた「メディア設定」（カラーバー・エンコード遅延・映像/音声の
+基本設定）とは**別の**「コーデック設定」に相当する詳細ページが存在し、以下の項目を
+含んでいた（既存のGUI/protocolでは未実装だったフィールドに絞って列挙）:
+
+- **映像信号処理系**（`mPSEncodeParam.Video`グループ）: 映像信号(VideoFormat, FieldID=12)・
+  フィールドオーダー(Field, FieldID=10)・カラープライマリー(ColorPrimaries, FieldID=13)・
+  変換特性(TransferCharacteristics, FieldID=14)・マトリクス係数(MatrixCoefficients, FieldID=15)
+- **GOP/ビットレート詳細**（`mPSEncodeParam.Quality`グループ）: GOP最小/最大フレーム数
+  (GOPMinLength=34/GOPMaxLength=35)・GOP内連続Bピクチャ最大数(BFrameCount=29)・
+  シーンチェンジ検出/TwoPass(Functions flags, FieldID=24)・映像レート(BitrateRatio=26)・
+  ビットレート最低/最高値(MinBitrateRatio=27/MaxBitrateRatio=28)・画質レベル(QualityRatio=30)
+- **デバッグ機能を有効にする**（先頭Functions flag1=EnableDebug, FieldID=1）
+- **ハードウェアアクセラレーション選択**（GUIでは`microsoft_d3d11va`と表示——ただしこれは
+  `mPSEncodeParam`のフィールドではなく`ProgramApply`時の`msMediaContent.EngineID`選択の
+  話であり、本ツールでは既にエンジンを自動選択するロジックがある。ユーザーが明示的に
+  選べるようにはなっていないが、既存の自動選択（nvidia/cuvid優先）で機能上は代替できている
+  ため、今回は見送り）
+
+さらに「放送設定」ページ（チャンネル/番組情報タブに相当）に**PCR PID**・**PMT PID**
+（`mMTSProgramParam`FieldID=0/1）が表示されていることも確認した——これも従来
+本ツールでは一切設定していなかった（`mnservice.exe`の既定値256/257のまま）。
+
+**BML設定ページ**（PID/コンポーネント/ビットレートの表形式）も確認したが、現在は空
+（過去にユーザーがエントリを削除した状態のまま）で、複数コンポーネントを扱える構造らしい
+ことは分かったものの、実際のフィールド構造はエントリを追加してみないと分からない——
+実機の設定ファイルを変更するリスクがあるため今回は深掘りせず、`BMLFile`(FieldID=38)の
+単一パス設定のみで留めた（未解決事項として記録）。
+
+「詳細モードを有効にする」「自動配信を有効にする」等のシステム設定ページは
+`mnservice.exe`のプロトコルフィールドではなくSTUDIOアプリ自体のローカル設定
+（電源プラン変更・ログ保存等）であり、送出ツールの機能としては対象外と判断した。
+
+**実装（事実）**: 発見した新規フィールドを`ModulationConfig.cs`に追加し、
+`GuiSession.StartChannel()`（`mnservice.exe`経由バックエンド）から送信するよう配線、
+GUIに新規タブ「詳細コーデック」を追加（コンボ5つ・チェックボックス3つ・数値7つ）、
+「チャンネル/番組情報」タブにPCR PID/PMT PIDを追加した。
+
+**ライブ検証（事実）**: `tools/custom_sender --epgencode`（既存の切り分けテストに新規
+フィールドの目立つテスト値を追加）を新規再起動した`mnservice.exe`に対して実行し、
+`ChannelStart: Result=ResultSuccess`で完走、`ChannelStop`/`ChannelClose`も正常終了する
+ことを確認した——PCR_PID/PMT_PID・Video.Field/VideoFormat/ColorPrimaries/
+TransferCharacteristics/MatrixCoefficients・Quality.Functions/BitrateRatio/
+MinBitrateRatio/MaxBitrateRatio/BFrameCount/QualityRatio/GOPMinLength/GOPMaxLengthの
+全新規フィールドを実機に受理させることに成功した。GUI自体の新規タブは
+`AddCombo`/`AddNumeric`/`AddCheckBox`（既存タブで動作実績のあるヘルパー、`AddCheckBox`は
+今回新設）で構築し、ビルド成功・GUI起動後のクラッシュなしを確認。タブの視覚的な
+切り替え確認は断念した（下記の副産物参照）ため、コードレビュー+CLI機能検証で代替した。
+実機は終始`Get-PnpDevice`で`Status=OK`。
+
+**副産物（重要な安全上の教訓）**: GUIの新タブの中身を`PrintWindow`で確認しようとした際、
+`TCM_SETCURSEL`だけではWinFormsの`TabControl`の表示ページが切り替わらない
+（ハイライトは変わるが中身は追従しない、Win32の仕様通り）ことが判明。これを
+`WM_NOTIFY`/`WM_REFLECT`+`WM_NOTIFY`の手動送信で回避しようとしたところ、
+**対象の.NETプロセスがクラッシュして消失した**（実機・`mnservice.exe`には無関係、
+GUIプロセス単体の問題）。実害はなかったが、二度と`WM_REFLECT`系メッセージを外部注入
+しないこと、`TCM_SETCURSEL`の限界に当たった場合はUI Automationを試すか、それも空振り
+なら無理せずコードレビュー+機能テストで代替することを教訓として
+[[feedback-windows-gui-testing]]に記録した。
+
+**未解決事項**: BMLの表形式ページの実際の構造（複数コンポーネント対応の詳細）、
+ハードウェアアクセラレーションのGUI上での明示選択、システム設定ページ相当の機能——
+これらは今回意図的に見送った。今後さらに「STUDIOパリティ」を追求する場合の次の
+候補として記録しておく。
 
 ## 重要な注意事項
 

@@ -1032,7 +1032,26 @@ namespace XHeadSender
             SetPropertyValue(channelStartProps, "mPSEncodeParam", 37, v => v.StrVal = "");       // DebugFile
             SetPropertyValue(channelStartProps, "mPSEncodeParam", 38, v => v.StrVal = "");       // BMLFile
 
-            Console.WriteLine("  Applied EPG + Media/Codec test overrides.");
+            // 2026-07-27 (続報21): newly-discovered fields from inventorying XHEAD-STUDIO's own
+            // GUI (「コーデック設定」page) -- previously never sent by this tool at all.
+            SetPropertyValue(channelStartProps, "mMTSProgramParam", 0, v => v.UintVal = 0x0200);  // PCR_PID
+            SetPropertyValue(channelStartProps, "mMTSProgramParam", 1, v => v.UintVal = 0x0201);  // PMT_PID
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 1, v => v.UintVal = 0);         // Functions (EnableDebug off)
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 10, v => v.IntVal = 1);         // Video.Field=BottomFieldFirst
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 12, v => v.IntVal = 1);         // Video.VideoFormat=NTSC
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 13, v => v.IntVal = 1);         // Video.ColorPrimaries=ITU_R_BT_709
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 14, v => v.IntVal = 1);         // Video.TransferCharacteristics=ITU_R_BT_709
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 15, v => v.IntVal = 1);         // Video.MatrixCoefficients=ITU_R_BT_709
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 24, v => v.UintVal = 3);        // Quality.Functions=SceneChange|TwoPass
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 26, v => v.UintVal = 70);       // Quality.BitrateRatio
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 27, v => v.UintVal = 20);       // Quality.MinBitrateRatio
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 28, v => v.UintVal = 90);       // Quality.MaxBitrateRatio
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 29, v => v.UintVal = 1);        // Quality.BFrameCount
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 30, v => v.UintVal = 65);       // Quality.QualityRatio
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 34, v => v.UintVal = 6);        // Quality.GOPMinLength
+            SetPropertyValue(channelStartProps, "mPSEncodeParam", 35, v => v.UintVal = 24);       // Quality.GOPMaxLength
+
+            Console.WriteLine("  Applied EPG + Media/Codec test overrides (including 続報21's new codec fields).");
             Console.Out.Flush();
 
             var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = clientId, HandleID = chHandle };

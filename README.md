@@ -21,7 +21,7 @@
 | ソース種別: カラーバー/サイントーン自己完結生成（`SourceTranscode`） | 部分的成功・GUI統合済み（要注意） | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報8・18」— 外部ファイル・キャプチャ不要な自己完結テスト信号ソースを発見。正しいフォーマット(H264/MP1_L2、Rawは拒否される)を指定すればRF出力まで到達（RTL-SDRで+34〜35dB実測）。`SourceOpen`は`mnservice.exe`側の内部例外により常に`Unknown`エラーを返す（クライアント側の問題ではないと確認済み）。**続報18で追加確認**: この例外の後`mnservice.exe`のgRPCサービス全体が無応答になることがある（DTMB/J83Cと同種の未対応コードパスのバグ）。GUI(`tools/custom_sender --colorbar`)には警告表示・トラブル時は`mnservice.exe`再起動が必要という注記を追加済み |
 | 出力時のBML付与（データ放送）・字幕再注入 | 部分的成功・GUI統合済み | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報9・11・16」— `mPSEncodeParam.BMLFile`(FieldID=38)は固定パスのローカル`.xbml`ファイルを指す方式と判明。TSDuckで実TSファイルを解析したところ、通常の`SourceUrl`経路では**字幕（ARIB PID 0x0114等）・データ放送カルーセルが構造的に落ちている**ことを確認、`BMLFile`経由でTSDuckで抽出した実字幕データの再注入を試行し、ネイティブ側の`mMTSBMLFile`クラス初期化まで到達（cdbで確認済み）。GUIの「メディア/コーデック」タブにファイル選択ダイアログ付きで統合済み。ビットレベルでの多重化確認・PTS同期は未着手 |
 | EPGの複数番組対応 | 調査完了・制約確認・GUI統合済み | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報11・16」— `mEPGSimpleParam`の全6フィールドをダンプし、Title/Descriptor/Type/EventIDが1件のみでスケジュールモードに従い繰り返し配信される構造だと確認。プロパティツリー上に「複数番組」に対応する別グループは存在せず、STUDIO・本ツールとも現状では複数番組EPGの直接設定手段なし。1件分の設定はGUIの「EPG」タブから可能 |
-| メディア/コーデック設定（Video/Audio PID・解像度・ビットレート等） | **完了** | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報16」— `mPSEncodeParam`(39フィールド)のうちSTUDIOパリティ+実用上主要な15フィールド(Performance/PID/Latency/QueueTime/解像度/フレームレート/音声Channel・SampleRate・Bitrate/レート制御方式/GOP長)をGUIの「メディア/コーデック」タブに追加。STUDIOの「コーデック設定」タブはDebugモードでも項目が増えない(空)ことを確認済みのため、この範囲でSTUDIOパリティを満たす |
+| メディア/コーデック設定（Video/Audio PID・解像度・ビットレート等） | **完了（続報21で拡張）** | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報16・21」— `mPSEncodeParam`(39フィールド)の基本15フィールドをGUIの「メディア/コーデック」タブに追加。**続報21**: STUDIO本体のGUIを実際に一通り操作したところ、「STUDIOのコーデック設定タブは空」という続報16の前提が誤りだったと判明（訂正済み）——映像信号/フィールドオーダー/カラープライマリー/変換特性/マトリクス係数/GOP最小・最大フレーム数/Bピクチャ数/シーンチェンジ検出/TwoPass/映像レート/ビットレート最低・最高値/画質レベル/デバッグ機能の14フィールドを新規GUIタブ「詳細コーデック」として追加、さらにPCR_PID/PMT_PID（従来未設定だった）も「チャンネル/番組情報」タブに追加。全フィールドの`ChannelStart`受理をライブ確認済み |
 | ISDB-T以外のMode切替（DVB_T等、STUDIOにない機能） | **8モード全て実施完了：成功3・安全な拒否2・サービスハング2** | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報12・13」— 当初「field not exists」で拒否されていたのは本ツール側の送信フォーマットの不備（旧モードの固有フィールド削除漏れ）と判明・修正。`DVB_T`/`ATSC`/`J83B`は`ChannelStart`まで完走しRF出力を実測（`tools/custom_sender --dvbt/--atsc/--j83b`）。`J83A`/`DVB_T2`は安全な値検証拒否。**`DTMB`/`J83C`は`ChannelStart`が`mnservice.exe`をサービス全体ごとハングさせる**（実機ハードウェア自体は`direct_usb`の直接読み取りで健全と確認済み、プロセス再起動で回復、フィールド数の多寡とは無相関）——`--dtmb`/`--j83c`は使用非推奨。ビットレベルでの規格準拠は未検証。**アンテナ接続での非ISDB-T送出は電波法上の理由から行わないこと** |
 | チャンネル/番組メタデータ（サービス名・NetworkID等）の変更 | **完了** | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報14」— GUIタブ実装後、`mMTSChannelParam`/`mMTSProgramParam`を明示的に上書きすると`ChannelStart`が`mnservice.exe`をハングさせる問題を発見し一時撤去。原因調査でXHEAD-STUDIO自身も同じ設定値で同様にハングすることを確認、プロトコル/フィールドの問題ではなく**長時間の検証作業によるUSB接続の劣化**と判明——実機を物理的に抜き差ししたところ即座に解消し、STUDIO・本ツールとも正常に送出できるようになった。GUI機能を復活済み（`tools/custom_sender`「チャンネル/番組情報」タブ）。DTMB/J83Cのハング（続報13）は抜き差し後も再現し、こちらは本物のモード固有バグと確認 |
 | RTL-SDRループバックでの実信号検証 | 完了 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出前後で470〜476MHz帯（6MHz幅、ISDB-Tの帯域幅と一致）に約38dBのパワー上昇を実測、送出停止で消失することも確認。設定した中心周波数473MHzとも一致 |
@@ -101,7 +101,7 @@ dotnet run -- --sourceurl [ファイルパス]  # CLI: 動画/TSファイルを�
 ```
 
 GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情報／EPG／メディア・コーデック／
-変調・RF電力設定）+ 接続→送出開始→停止→切断のボタン操作を基本としている。冒頭の
+詳細コーデック／変調・RF電力設定）+ 接続→送出開始→停止→切断のボタン操作を基本としている。冒頭の
 「接続方式」トグルで**mnservice.exe経由**（既定、全機能）と**直接USB**（`mnservice.exe`
 不要、[tools/direct_usb](tools/direct_usb)と同じWinUSB直接ロジックを`DirectUsbSession.cs`
 として統合したもの、変調パラメータ+RF電力設定のみ対応）を切り替えられる。
@@ -113,8 +113,8 @@ GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情�
   （[続報19・20](docs/protocol/modulation_capabilities.md)）——選択したModeに応じて
   Constellationの選択肢や有効なフィールドが自動的に切り替わる。
 - **チャンネル・番組情報タブ**（mnservice.exe経由のみ）: サービス名・ネットワーク名・TS名・
-  地域識別・放送事業者ID・リモコン番号・サービス番号・コピー制御
-  （`mMTSChannelParam`/`mMTSProgramParam`、[続報14](docs/protocol/modulation_capabilities.md)）。
+  地域識別・放送事業者ID・リモコン番号・サービス番号・コピー制御・PCR PID・PMT PID
+  （`mMTSChannelParam`/`mMTSProgramParam`、[続報14・21](docs/protocol/modulation_capabilities.md)）。
 - **EPGタブ**（mnservice.exe経由のみ）: モード・配信間隔・イベントID・ジャンル・タイトル・
   番組内容（`mEPGSimpleParam`、[続報11・16](docs/protocol/modulation_capabilities.md)。
   1件のみ・繰り返し配信という制約はハードウェア側の仕様）。
@@ -122,6 +122,11 @@ GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情�
   レイテンシ・解像度・アスペクト比・フレームレート・音声チャンネル/サンプルレート/
   ビットレート・レート制御方式・GOP長・BMLファイル（`.xbml`選択ダイアログ付き、
   [続報9・11・16](docs/protocol/modulation_capabilities.md)）。
+- **詳細コーデックタブ**（mnservice.exe経由のみ、[続報21](docs/protocol/modulation_capabilities.md)
+  で新規追加）: 映像信号・フィールドオーダー・カラープライマリー・変換特性・マトリクス係数・
+  GOP最小/最大フレーム数・GOP内Bピクチャ最大数・シーンチェンジ検出・TwoPass・映像レート・
+  ビットレート最低/最高値・画質レベル・デバッグ機能——STUDIO本体のGUIを実際に操作して
+  発見した、従来「STUDIOのコーデック設定タブは空」と誤って記録されていたフィールド群。
 - **ソースタブ**（mnservice.exe経由のみ）: RFのみ／デスクトップキャプチャ（実際の画面を送出）／
   動画ファイル指定（`.ts`等を選んで送出）——STUDIO本体の基本動作（ファイル/画面を選んで送出
   開始）に相当する機能をGUI・CLI（`--sourceurl`）両方で実現している。

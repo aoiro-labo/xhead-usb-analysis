@@ -62,6 +62,8 @@ namespace XHeadSender
         private NumericUpDown _numRemoteControlKeyID;
         private NumericUpDown _numServiceNo;
         private ComboBox _cmbCopyFlag;
+        private NumericUpDown _numPcrPid;
+        private NumericUpDown _numPmtPid;
         private ComboBox _cmbEPGMode;
         private NumericUpDown _numEPGIntervalHours;
         private NumericUpDown _numEPGEventID;
@@ -83,11 +85,27 @@ namespace XHeadSender
         private NumericUpDown _numGOPLength;
         private TextBox _txtBMLFile;
         private Button _btnBrowseBML;
+        private ComboBox _cmbVideoField;
+        private ComboBox _cmbVideoFormat;
+        private ComboBox _cmbColorPrimaries;
+        private ComboBox _cmbTransferCharacteristics;
+        private ComboBox _cmbMatrixCoefficients;
+        private NumericUpDown _numBitrateRatio;
+        private NumericUpDown _numMinBitrateRatio;
+        private NumericUpDown _numMaxBitrateRatio;
+        private NumericUpDown _numBFrameCount;
+        private NumericUpDown _numQualityRatio;
+        private NumericUpDown _numGOPMinLength;
+        private NumericUpDown _numGOPMaxLength;
+        private CheckBox _chkEnableDetechSceneChange;
+        private CheckBox _chkEnableTwoPass;
+        private CheckBox _chkEnableDebugFunction;
         private TextBox _txtLog;
         private TabPage _sourceTab;
         private TabPage _metaTab;
         private TabPage _epgTab;
         private TabPage _mediaTab;
+        private TabPage _codecTab;
         private bool _updatingSourceRadios;
 
         public MainForm()
@@ -236,6 +254,10 @@ namespace XHeadSender
                 new ComboItem(2, "CopyOnce"),
                 new ComboItem(3, "Forbidden"),
             }, 0, "コピー制御記述子(mMTSProgramParam.CopyFlag)。");
+            _numPcrPid = AddNumericHex(metaLayout, "PCR PID", 0, 65535, 0x0100,
+                "mMTSProgramParam.PCR_PID。STUDIO本体の「放送設定」で確認済み(続報21)、従来は未設定だった。");
+            _numPmtPid = AddNumericHex(metaLayout, "PMT PID", 0, 65535, 0x0101,
+                "mMTSProgramParam.PMT_PID。STUDIO本体の「放送設定」で確認済み(続報21)、従来は未設定だった。");
 
             var epgLayout = NewParamTable();
             epgLayout.Padding = new Padding(10, 10, 6, 10);
@@ -327,6 +349,60 @@ namespace XHeadSender
                 "(続報9参照、ARIB STD-B35のBCMLとは別物)。実際に有効なコンテンツかはビットレベル" +
                 "未検証(続報11参照)。");
             _toolTip.SetToolTip(_txtBMLFile, "空欄なら未使用。");
+
+            // 2026-07-27 (続報21): STUDIO本体のGUIを一通り操作して発見した、これまで未実装
+            // だった詳細エンコーダ設定。STUDIO側も「メディア設定」(上のmediaLayout相当)とは
+            // 別の「コーデック設定」サブページとして分けているため、GUIでもタブを分ける。
+            var codecLayout = NewParamTable();
+            codecLayout.Padding = new Padding(10, 10, 6, 4);
+            _cmbVideoFormat = AddCombo(codecLayout, "映像信号", new[]
+            {
+                new ComboItem(0, "Component"), new ComboItem(1, "NTSC"), new ComboItem(2, "PAL"),
+                new ComboItem(3, "SECAM"), new ComboItem(4, "MAC"), new ComboItem(5, "Unspecified"),
+                new ComboItem(6, "Automatic (既定)"),
+            }, 6, "mPSEncodeParam.Video.VideoFormat。STUDIOの「映像信号」に相当。");
+            _cmbVideoField = AddCombo(codecLayout, "フィールドオーダー", new[]
+            {
+                new ComboItem(0, "TopFieldFirst (既定)"), new ComboItem(1, "BottomFieldFirst"),
+            }, 0, "mPSEncodeParam.Video.Field。STUDIOの「フィールドオーダー」に相当。");
+            _cmbColorPrimaries = AddCombo(codecLayout, "カラープライマリー", new[]
+            {
+                new ComboItem(0, "Automatic (既定)"), new ComboItem(1, "ITU_R_BT_709"), new ComboItem(2, "Unspecified"),
+                new ComboItem(3, "ITU_R_BT_470_2_System_M"), new ComboItem(4, "ITU_R_BT_470_2_System_B_G"),
+                new ComboItem(5, "SMPTE_170M"), new ComboItem(6, "SMPTE_240M"),
+            }, 0, "mPSEncodeParam.Video.ColorPrimaries。");
+            _cmbTransferCharacteristics = AddCombo(codecLayout, "変換特性", new[]
+            {
+                new ComboItem(0, "Automatic (既定)"), new ComboItem(1, "ITU_R_BT_709"), new ComboItem(2, "Unspecified"),
+                new ComboItem(3, "ITU_R_BT_470_2_System_M"), new ComboItem(4, "ITU_R_BT_470_2_System_B_G"),
+                new ComboItem(5, "SMPTE_170M"), new ComboItem(6, "SMPTE_240M"),
+            }, 0, "mPSEncodeParam.Video.TransferCharacteristics。");
+            _cmbMatrixCoefficients = AddCombo(codecLayout, "マトリクス係数", new[]
+            {
+                new ComboItem(0, "Automatic (既定)"), new ComboItem(1, "ITU_R_BT_709"), new ComboItem(2, "Unspecified"),
+                new ComboItem(3, "FCC"), new ComboItem(4, "ITU_R_BT_470_2_System_B_G"),
+                new ComboItem(5, "SMPTE_170M"), new ComboItem(6, "SMPTE_240M"),
+            }, 0, "mPSEncodeParam.Video.MatrixCoefficients。");
+            _numGOPMinLength = AddNumeric(codecLayout, "GOP最小フレーム数", 0, 60, 0,
+                "mPSEncodeParam.Quality.GOPMinLength。");
+            _numGOPMaxLength = AddNumeric(codecLayout, "GOP最大フレーム数", 0, 60, 0,
+                "mPSEncodeParam.Quality.GOPMaxLength。");
+            _numBFrameCount = AddNumeric(codecLayout, "GOP内連続Bピクチャ最大数", 0, 2, 2,
+                "mPSEncodeParam.Quality.BFrameCount。");
+            _chkEnableDetechSceneChange = AddCheckBox(codecLayout, "シーンチェンジ検出を有効にする", true,
+                "mPSEncodeParam.Quality.Functions flag1(EnableDetechSceneChange)。STUDIOは既定ON。");
+            _chkEnableTwoPass = AddCheckBox(codecLayout, "TwoPass", false,
+                "mPSEncodeParam.Quality.Functions flag2(EnableTwoPass)。STUDIOは既定OFF。");
+            _numBitrateRatio = AddNumeric(codecLayout, "映像レート", 0, 255, 50,
+                "mPSEncodeParam.Quality.BitrateRatio。STUDIOの「映像レート」スライダに相当(0-255)。");
+            _numMinBitrateRatio = AddNumeric(codecLayout, "ビットレート最低値", 0, 255, 50,
+                "mPSEncodeParam.Quality.MinBitrateRatio。");
+            _numMaxBitrateRatio = AddNumeric(codecLayout, "ビットレート最高値", 0, 255, 50,
+                "mPSEncodeParam.Quality.MaxBitrateRatio。");
+            _numQualityRatio = AddNumeric(codecLayout, "画質レベル", 0, 100, 50,
+                "mPSEncodeParam.Quality.QualityRatio。STUDIOの「画質レベル」に相当(0-100)。");
+            _chkEnableDebugFunction = AddCheckBox(codecLayout, "デバッグ機能を有効にする", false,
+                "mPSEncodeParam.Functions flag1(EnableDebug)。STUDIOは既定OFF、通常は変更不要。");
 
             var modLayout = NewParamTable();
             modLayout.Padding = new Padding(10, 10, 6, 4);
@@ -420,6 +496,9 @@ namespace XHeadSender
             var mediaTab = new TabPage("メディア/コーデック") { AutoScroll = true };
             mediaTab.Controls.Add(mediaLayout);
 
+            var codecTab = new TabPage("詳細コーデック") { AutoScroll = true };
+            codecTab.Controls.Add(codecLayout);
+
             var sourceTab = new TabPage("ソース") { AutoScroll = true };
             sourceTab.Controls.Add(sourceLayout);
 
@@ -428,6 +507,7 @@ namespace XHeadSender
             tabControl.TabPages.Add(metaTab);
             tabControl.TabPages.Add(epgTab);
             tabControl.TabPages.Add(mediaTab);
+            tabControl.TabPages.Add(codecTab);
             tabControl.TabPages.Add(modTab);
 
             var logLabel = new Label { Dock = DockStyle.Top, Height = 22, Text = "ログ:", Padding = new Padding(8, 6, 0, 0) };
@@ -460,6 +540,7 @@ namespace XHeadSender
             _metaTab = metaTab;
             _epgTab = epgTab;
             _mediaTab = mediaTab;
+            _codecTab = codecTab;
         }
 
         private static TableLayoutPanel NewParamTable()
@@ -527,6 +608,20 @@ namespace XHeadSender
             return txt;
         }
 
+        private CheckBox AddCheckBox(TableLayoutPanel layout, string label, bool value, string tooltip)
+        {
+            int row = layout.RowStyles.Count;
+            layout.RowCount = row + 1;
+            var lbl = new Label { Text = label, Anchor = AnchorStyles.Left, AutoSize = true, Padding = new Padding(0, 6, 4, 0) };
+            layout.Controls.Add(lbl, 0, row);
+            var chk = new CheckBox { Checked = value, AutoSize = true, Anchor = AnchorStyles.Left };
+            layout.Controls.Add(chk, 1, row);
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _toolTip.SetToolTip(lbl, tooltip);
+            _toolTip.SetToolTip(chk, tooltip);
+            return chk;
+        }
+
         private static int SelectedValue(ComboBox cmb) => ((ComboItem)cmb.SelectedItem).Value;
 
         private ModulationConfig ReadConfigFromForm()
@@ -552,6 +647,8 @@ namespace XHeadSender
                 ServiceNo = (uint)_numServiceNo.Value,
                 ServiceName = _txtServiceName.Text,
                 CopyFlag = SelectedValue(_cmbCopyFlag),
+                PcrPid = (uint)_numPcrPid.Value,
+                PmtPid = (uint)_numPmtPid.Value,
                 EPGMode = SelectedValue(_cmbEPGMode),
                 EPGIntervalHours = (uint)_numEPGIntervalHours.Value,
                 EPGEventID = (uint)_numEPGEventID.Value,
@@ -572,6 +669,21 @@ namespace XHeadSender
                 QualityMode = SelectedValue(_cmbQualityMode),
                 GOPLength = (uint)_numGOPLength.Value,
                 BMLFile = _txtBMLFile.Text,
+                VideoField = SelectedValue(_cmbVideoField),
+                VideoFormat = SelectedValue(_cmbVideoFormat),
+                ColorPrimaries = SelectedValue(_cmbColorPrimaries),
+                TransferCharacteristics = SelectedValue(_cmbTransferCharacteristics),
+                MatrixCoefficients = SelectedValue(_cmbMatrixCoefficients),
+                EnableDebugFunction = _chkEnableDebugFunction.Checked,
+                BitrateRatio = (uint)_numBitrateRatio.Value,
+                MinBitrateRatio = (uint)_numMinBitrateRatio.Value,
+                MaxBitrateRatio = (uint)_numMaxBitrateRatio.Value,
+                BFrameCount = (uint)_numBFrameCount.Value,
+                QualityRatio = (uint)_numQualityRatio.Value,
+                GOPMinLength = (uint)_numGOPMinLength.Value,
+                GOPMaxLength = (uint)_numGOPMaxLength.Value,
+                EnableDetechSceneChange = _chkEnableDetechSceneChange.Checked,
+                EnableTwoPass = _chkEnableTwoPass.Checked,
             };
         }
 
@@ -607,6 +719,7 @@ namespace XHeadSender
             _metaTab.Enabled = !direct;
             _epgTab.Enabled = !direct;
             _mediaTab.Enabled = !direct;
+            _codecTab.Enabled = !direct;
             _cmbMode.Enabled = direct;
             if (!direct)
             {

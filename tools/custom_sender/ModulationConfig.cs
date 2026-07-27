@@ -37,6 +37,10 @@ namespace XHeadSender
         public uint ServiceNo = 1;           // mMTSProgramParam FieldID=8, 0-8
         public string ServiceName = "VAT-01";    // mMTSProgramParam FieldID=12, maxlen=16, 受信機のチャンネル名表示
         public int CopyFlag = 0;             // mMTSProgramParam FieldID=11, 0=Free 2=CopyOnce 3=Forbidden
+        // 2026-07-27: STUDIO本体のGUIを一通り操作して発見(続報21)、これまで本ツールでは
+        // 未設定だった(mnservice.exeの既定値=256/257のまま)。
+        public uint PcrPid = 256;            // mMTSProgramParam FieldID=0, 0-65535 (hex表示)
+        public uint PmtPid = 257;            // mMTSProgramParam FieldID=1, 0-65535 (hex表示)
 
         // EPG (mEPGSimpleParam) -- STUDIOの「EPG設定」タブ相当。1件のみ・繰り返し配信という
         // 制約はハードウェア/ファームウェア側の仕様(docs/protocol/modulation_capabilities.md
@@ -65,5 +69,27 @@ namespace XHeadSender
         public uint GOPLength = 18;          // FieldID=33, 0-60
         public string DebugFile = "";        // FieldID=37, maxlen無制限。空文字ならエンコーダのデバッグダンプ出力を無効化
         public string BMLFile = "";          // FieldID=38, maxlen無制限。.xbmlファイルへのローカルパス(データ放送/字幕再注入)
+
+        // 2026-07-27 (続報21): STUDIO本体のGUI「出力設定」→「コーデック設定」を一通り操作して
+        // 発見した、これまで本ツールでは未実装だったフィールド群。STUDIOの「メディア設定」
+        // (上記までの15フィールド)とは別の詳細サブページに相当するため、GUIでも独立した
+        // 「詳細コーデック」タブとして追加する。これまで「STUDIOのコーデック設定タブは
+        // Debugモードでも項目が増えない(空)」と誤って記録していた(続報16)が、実際には
+        // 多数のフィールドを含む別画面だったと判明・訂正。
+        public int VideoField = 0;              // Video group FieldID=10, 0=TopFieldFirst(既定) 1=BottomFieldFirst
+        public int VideoFormat = 6;             // Video group FieldID=12, 0=Component 1=NTSC 2=PAL 3=SECAM 4=MAC 5=Unspecified 6=Automatic(既定)
+        public int ColorPrimaries = 0;          // Video group FieldID=13, 0=Automatic(既定) 1=ITU_R_BT_709 2=Unspecified 3=ITU_R_BT_470_2_System_M 4=ITU_R_BT_470_2_System_B_G 5=SMPTE_170M 6=SMPTE_240M
+        public int TransferCharacteristics = 0; // Video group FieldID=14, ColorPrimariesと同じenum系統
+        public int MatrixCoefficients = 0;      // Video group FieldID=15, 0=Automatic(既定) 1=ITU_R_BT_709 2=Unspecified 3=FCC 4=ITU_R_BT_470_2_System_B_G 5=SMPTE_170M 6=SMPTE_240M
+        public bool EnableDebugFunction = false; // 先頭Functions(FieldID=1, FieldFlags) flag1=EnableDebug。flag2=EnableOutputFileは未使用のため固定0
+        public uint BitrateRatio = 50;          // Quality group FieldID=26, 0-255。STUDIOの「映像レート」スライダに相当
+        public uint MinBitrateRatio = 50;       // Quality group FieldID=27, 0-255。STUDIOの「最低値」
+        public uint MaxBitrateRatio = 50;       // Quality group FieldID=28, 0-255。STUDIOの「最高値」
+        public uint BFrameCount = 2;            // Quality group FieldID=29, 0-2。STUDIOの「GOP内連続Bピクチャ最大数」
+        public uint QualityRatio = 50;          // Quality group FieldID=30, 0-100。STUDIOの「画質レベル」
+        public uint GOPMinLength = 0;           // Quality group FieldID=34, 0-60
+        public uint GOPMaxLength = 0;           // Quality group FieldID=35, 0-60
+        public bool EnableDetechSceneChange = true; // Quality.Functions(FieldID=24, FieldFlags) flag1。STUDIOは既定ON
+        public bool EnableTwoPass = false;          // Quality.Functions(FieldID=24) flag2。STUDIOは既定OFF
     }
 }
