@@ -4,6 +4,8 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security;
+using System.Text;
 using System.Threading;
 
 namespace XHeadSender
@@ -40,6 +42,7 @@ namespace XHeadSender
         private Thread _streamThread;
         private UdpClient _udpClient;
         private Process _tsduckProcess;
+        private string _temporaryEitFile;
         private volatile bool _streamStopRequested;
         private Exception _streamError;
 
@@ -239,6 +242,11 @@ namespace XHeadSender
         /// </summary>
         public void StartTSDuckFileStream(string path, int port, long bitrate = 20000000)
         {
+            StartTSDuckFileStream(path, port, bitrate, null);
+        }
+
+        public void StartTSDuckFileStream(string path, int port, long bitrate, ModulationConfig metadata)
+        {
             if (!File.Exists(path)) throw new FileNotFoundException("TSファイルが見つかりません。", path);
             if (bitrate <= 0) throw new ArgumentOutOfRangeException(nameof(bitrate));
             string tspPath = FindTSDuck();
@@ -249,10 +257,28 @@ namespace XHeadSender
             try
             {
                 string fullPath = Path.GetFullPath(path);
+                string plugins = "";
+                if (metadata != null)
+                {
+                    plugins += $" -P svrename --japan --name {QuoteArgument(metadata.ServiceName)}" +
+                        $" --provider {QuoteArgument(metadata.NetworkName)} --id {Math.Max(1, metadata.ServiceNo)}";
+                    if (metadata.EPGMode != 0)
+                        plugins += $" -P sdt --japan --service-id {Math.Max(1, metadata.ServiceNo)} --eit-pf 1" +
+                            $" --eit-schedule {(metadata.EPGMode == 257 ? 1 : 0)}";
+                    plugins += $" -P nit --create --network-name {QuoteArgument(metadata.NetworkName)}";
+                    if (metadata.EPGMode != 0)
+                    {
+                        _temporaryEitFile = CreateEitFile(metadata);
+                        plugins += $" -P eitinject --japan --actual --wait-first-batch --time system" +
+                            $" --files {QuoteArgument(_temporaryEitFile)} --cycle-pf-actual 1" +
+                            " --cycle-schedule-actual-prime 1 --cycle-schedule-actual-later 1";
+                    }
+                }
                 var start = new ProcessStartInfo
                 {
                     FileName = tspPath,
-                    Arguments = $"-I file --infinite {QuoteArgument(fullPath)} -P regulate --bitrate {bitrate} -O ip --packet-burst 7 127.0.0.1:{port}",
+                    Arguments = $"--japan --add-input-stuffing 1/20 -I file --infinite {QuoteArgument(fullPath)}" +
+                        plugins + $" -P regulate --bitrate {bitrate} -O ip --packet-burst 7 127.0.0.1:{port}",
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
@@ -285,6 +311,11 @@ namespace XHeadSender
                 {
                     tsduck.Dispose();
                 }
+            }
+            if (_temporaryEitFile != null)
+            {
+                try { File.Delete(_temporaryEitFile); } catch { }
+                _temporaryEitFile = null;
             }
             // Release a worker waiting in Receive(). The resulting SocketException/ObjectDisposedException
             // is an expected part of shutdown and is suppressed by StreamUdpWorker.
@@ -320,6 +351,22 @@ namespace XHeadSender
                 catch (ArgumentException) { }
             }
             return null;
+        }
+
+        private static string CreateEitFile(ModulationConfig cfg)
+        {
+            DateTime start = DateTime.Now.AddSeconds(5);
+            TimeSpan duration = TimeSpan.FromHours(Math.Max(1, cfg.EPGIntervalHours));
+            string xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<tsduck>\r\n" +
+                $"  <EIT type=\"pf\" actual=\"true\" service_id=\"{Math.Max(1, cfg.ServiceNo)}\" transport_stream_id=\"1\" original_network_id=\"1\">\r\n" +
+                $"    <event event_id=\"{cfg.EPGEventID}\" start_time=\"{start:yyyy-MM-dd HH:mm:ss}\" duration=\"{duration:hh\\:mm\\:ss}\" running_status=\"running\">\r\n" +
+                "      <short_event_descriptor language_code=\"jpn\">\r\n" +
+                $"        <event_name>{SecurityElement.Escape(cfg.EPGTitle ?? "")}</event_name>\r\n" +
+                $"        <text>{SecurityElement.Escape(cfg.EPGDescriptor ?? "")}</text>\r\n" +
+                "      </short_event_descriptor>\r\n    </event>\r\n  </EIT>\r\n</tsduck>\r\n";
+            string path = Path.Combine(Path.GetTempPath(), "xhead-eit-" + Guid.NewGuid().ToString("N") + ".xml");
+            File.WriteAllText(path, xml, new UTF8Encoding(false));
+            return path;
         }
 
         private static string QuoteArgument(string value)

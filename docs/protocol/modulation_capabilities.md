@@ -1021,8 +1021,8 @@ GUIタブ、`GuiSession.StartChannel()`）。
 GUIに「接続方式」トグル（mnservice.exe経由 / 直接USB）を追加し、「直接USB」を選ぶと:
 - `GuiSession`(gRPC)の代わりに`DirectUsbSession`(WinUSB直接)を使う
 - 当時の対応範囲は変調パラメータ+RF電力設定のみだった。続報32で「ソース」タブの
-  TSファイル/TSDuck/時刻スケジュールを直接USBにも接続した。チャンネル/番組情報の生成は
-  引き続きサービス側機能だが、事前に完成TSへ多重化した情報は直接送出できる
+  TSファイル/TSDuck/時刻スケジュールを直接USBにも接続した。続報33ではサービス名・
+  サービスID・ネットワーク名・EPGをTSDuckで入力TSへ反映する経路も追加した
 - `mnservice.exe`/`xhead_studio.exe`は事前に停止しておく必要がある（WinUSBインターフェースを
   排他保持するため、`DirectUsbSession.Open()`は素直に失敗する）
 
@@ -1689,6 +1689,19 @@ PAT/PMT/SDT、MPEG-2映像、AAC音声を確認した。transport error indicato
 デスクトップキャプチャとカラーバーは`mnservice.exe`内蔵エンコーダが必要なため直接USB時だけ
 無効化する。EPG・字幕・データ放送を含む完成TSは内容を変えずbulk送出できるので、TSDuck等で
 事前多重化する経路と組み合わせられる。
+
+### 続報33 (2026-07-30): 直接USB GUIのチャンネル情報・EPGをTSへ自動反映
+
+直接USB時にも「チャンネル・番組情報」「EPG」タブを有効化し、TSDuck加工を選ぶとGUI値から
+送出TSをリアルタイムで書き換えるようにした。`svrename --japan`でサービス名・サービスID・
+provider名、`nit --create --network-name`でネットワーク名を反映する。EPGはタイトル・説明・
+EventID・配信間隔から一時EIT XMLを生成し、`eitinject --japan --actual`でp/fとscheduleを
+PID 0x0012へ注入する。一時XMLは送信停止時に削除する。
+
+RFを使わない事前検証TSを`analyze --japan`で再解析し、日本語サービス名、provider名、
+PID 0x0012のEIT p/f/scheduleを確認した。RegionID/BroadcasterID/RemoteControlKeyID/
+CopyFlag/PCR・PMT PID変更は同等の安全なTS変換をまだ実装していないため、直接USB時は
+誤解を避けるため個別コントロールを無効表示する。
 
 ## 重要な注意事項
 

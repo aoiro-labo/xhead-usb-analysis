@@ -228,7 +228,7 @@ namespace XHeadSender
             urlRow.Controls.Add(_btnBrowseUrl);
 
             var directTsRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(20, 0, 0, 4) };
-            _chkDirectUseTSDuck = new CheckBox { Text = "直接USB時にTSDuckを使用", AutoSize = true, Checked = false, Anchor = AnchorStyles.Left };
+            _chkDirectUseTSDuck = new CheckBox { Text = "TSDuckでチャンネル情報・EPGを反映", AutoSize = true, Checked = true, Anchor = AnchorStyles.Left };
             _numDirectTsBitrate = new NumericUpDown
             {
                 Minimum = 100000,
@@ -243,7 +243,7 @@ namespace XHeadSender
             directTsRow.Controls.Add(new Label { Text = "TSビットレート:", AutoSize = true, Padding = new Padding(10, 4, 0, 0) });
             directTsRow.Controls.Add(_numDirectTsBitrate);
             directTsRow.Controls.Add(new Label { Text = "bps", AutoSize = true, Padding = new Padding(0, 4, 0, 0) });
-            SetHelpTip(_chkDirectUseTSDuck, "OFFは内蔵ループ送信、ONはTSDuckで整流してlocalhost UDP経由で送信します。");
+            SetHelpTip(_chkDirectUseTSDuck, "サービス名・ネットワーク名・EPGを入力TSへ反映して送信します。OFFはTSを無加工で送信します。");
 
             var scheduleRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0, 2, 0, 4) };
             _rbSourceSchedule = new RadioButton { Text = "時刻スケジュール:", AutoSize = true, Anchor = AnchorStyles.Left };
@@ -808,8 +808,8 @@ namespace XHeadSender
         {
             bool direct = UseDirectBackend;
             _sourceTab.Enabled = true;
-            _metaTab.Enabled = !direct;
-            _epgTab.Enabled = !direct;
+            _metaTab.Enabled = true;
+            _epgTab.Enabled = true;
             _mediaTab.Enabled = !direct;
             _codecTab.Enabled = !direct;
             _cmbMode.Enabled = direct;
@@ -817,6 +817,16 @@ namespace XHeadSender
             _rbSourceColorbar.Enabled = !direct;
             _chkDirectUseTSDuck.Enabled = direct;
             _numDirectTsBitrate.Enabled = direct;
+            // Direct TS rewriting currently maps the fields which have safe TSDuck equivalents.
+            // Keep the remaining mnservice-only controls visible but disabled to avoid implying
+            // that RF register writes can change PSI/SI or encoder PID assignments.
+            _numRegionID.Enabled = !direct;
+            _numBroadcasterID.Enabled = !direct;
+            _numRemoteControlKeyID.Enabled = !direct;
+            _txtTSName.Enabled = !direct;
+            _cmbCopyFlag.Enabled = !direct;
+            _numPcrPid.Enabled = !direct;
+            _numPmtPid.Enabled = !direct;
             if (direct && (_rbSourceCapture.Checked || _rbSourceColorbar.Checked))
                 _rbSourceNone.Checked = true;
             if (!direct)
@@ -1041,9 +1051,9 @@ namespace XHeadSender
                     await Task.Run(() =>
                     {
                         _directSession.StartChannel(cfg);
-                        if (attachUrl) StartDirectFileStream(urlPath, directUseTSDuck, directTsBitrate);
+                        if (attachUrl) StartDirectFileStream(urlPath, directUseTSDuck, directTsBitrate, cfg);
                         else if (attachSchedule && initialScheduleEntry != null)
-                            StartDirectFileStream(initialScheduleEntry.Path, directUseTSDuck, directTsBitrate);
+                            StartDirectFileStream(initialScheduleEntry.Path, directUseTSDuck, directTsBitrate, cfg);
                     });
                     string label = attachUrl ? "送出中（直接USB、TSファイル）" :
                         attachSchedule ? (initialScheduleEntry == null ? "送出中（直接USB、スケジュール待機）" :
@@ -1198,6 +1208,7 @@ namespace XHeadSender
             _scheduleTimer.Stop();
             bool directUseTSDuck = _chkDirectUseTSDuck.Checked;
             long directTsBitrate = decimal.ToInt64(_numDirectTsBitrate.Value);
+            ModulationConfig directMetadata = ReadConfigFromForm();
             try
             {
                 Console.WriteLine($"[GUI] スケジュール切替: {active.Path}");
@@ -1206,7 +1217,7 @@ namespace XHeadSender
                     if (UseDirectBackend)
                     {
                         _directSession.StopTsStream();
-                        StartDirectFileStream(active.Path, directUseTSDuck, directTsBitrate);
+                        StartDirectFileStream(active.Path, directUseTSDuck, directTsBitrate, directMetadata);
                     }
                     else
                     {
@@ -1229,10 +1240,10 @@ namespace XHeadSender
             }
         }
 
-        private void StartDirectFileStream(string path, bool useTSDuck, long bitrate)
+        private void StartDirectFileStream(string path, bool useTSDuck, long bitrate, ModulationConfig metadata)
         {
             if (useTSDuck)
-                _directSession.StartTSDuckFileStream(path, 1234, bitrate);
+                _directSession.StartTSDuckFileStream(path, 1234, bitrate, metadata);
             else
                 _directSession.StartTsStream(path, bitrate);
         }

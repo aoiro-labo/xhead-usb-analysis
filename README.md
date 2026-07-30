@@ -143,8 +143,9 @@ GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情�
 
 直接USB GUIでは「ソース」でTSファイルまたはスケジュールを選ぶ。内蔵ループ送信のほか、
 「直接USB時にTSDuckを使用」を有効にすると`tsp`による整流を経由でき、TSビットレートも
-GUIから指定できる。キャプチャとカラーバーの生成はサービス内蔵エンコーダ依存のため
-直接USBでは使えないが、映像・音声・字幕・EPG等を事前に多重化した完成TSは送出できる。
+GUIから指定できる。直接USBでもサービス名・サービスID・ネットワーク名と1件のEPGを
+TSDuckで入力TSのSDT/NIT/EITへ反映できる。キャプチャとカラーバーの生成はサービス内蔵
+エンコーダ依存のため直接USBでは使えないが、字幕等を含む完成TSは内容を保って送出できる。
 
 - **変調・RF電力設定タブ**: 周波数・Constellation・Bandwidth・FFT・CodeRate・
   GuardInterval・TimeInterleavce・RF電力(Level/PAGain/DACGain)を自由に設定でき、
