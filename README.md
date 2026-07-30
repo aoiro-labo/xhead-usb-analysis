@@ -137,11 +137,14 @@ GUIには`mnservice.exe`の「サービス起動」「サービス停止」ボ�
 `XHeadSender.exe --guifiletest input.ts`を使用できる。
 
 直接USBのISDB-T既定値は、mnservice経由でTVTestのD/E=0を確認した堅牢な
-QPSK・FFT 8k・符号化率5/6・GI 1/16・Time Interleave 3・約7.159 Mbit/sへ合わせている。
-ただし直接USBでは同じ物理値でもTEIが残る。録画TSから除去されたnull packetのCBR補充は
-実装済み。USBPcapで公式経路を再取得した結果、ProgramApply以後に追加レジスタ書き込みは
-存在せず、従来のPID→階層routing/TMCCレジスタ不足説は否定された。公式がbulk中に行う
-`0x0629` read→zero-write ACKと較正レジスタ読み出しも再現したがTEIは残り、実用品質には未達である。
+設定を基準に調査中である。ただし直接USBのTS送信は実験用で、実用品質には未達。
+直近のCBR補充・リングACK・較正読み出し実験はいったん撤回し、単純な送信実装へ戻した。
+USB bulkから公式TSを抽出した結果、mnserviceは入力を素通しせず、単一サービス・固定PID・
+7,159,151 bit/sのISDB-T TSへ完全に再多重化していた。従来の直接経路は元の4サービスと
+NIT等を残したまま部分改名しており不整合だった。詳細は
+[mnservice出力TSと直接USB入力TSの比較](docs/protocol/service_vs_direct_ts.md)を参照。
+直接USBの再実装では映像・音声・字幕・データ放送を可能な限りパススルーし、放送網ID、
+PAT/PMT/NIT/SDT/BIT/EIT、PCR/CBRなど必要な箇所だけを整合させる。
 
 GUIのログ先頭には、実際に起動したexeの絶対パスとビルド更新日時を表示する。直接USBを選んだ
 のに旧「Source添付は利用できません」という文面が出る場合は古いDebug版を起動しているため、

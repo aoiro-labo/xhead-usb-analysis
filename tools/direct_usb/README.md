@@ -500,3 +500,9 @@ bulk投入方式またはChannelStart以前の初期化差分として引き続�
 DTV03A-1TU（Digibest ISDBT2071、px4_drv）でもフルセグをロックし、受信TSをTSDuckで解析した。
 PAT/PMT/SDT、MPEG-2映像PID 0x0100、AAC音声PID 0x0101を確認しており、
 `mnservice.exe`非依存の「TS → USB → RF → 実受信機 → TS」が成立した。
+
+**2026-07-30訂正**: その後の大量TEI調査で、TS送信は実用品質に達していないと判明した。
+CBR補充・リングACK等の実験変更はいったん撤回して単純実装へ戻した。また公式bulk TSは
+入力TSの素通しではなく、mnserviceが単一サービス・固定PID・7,159,151 bit/sへ完全に
+再多重化したものだった。従来の直接経路は元TSの複数サービス/NIT/TSIDを残しており、
+チャンネル情報が不整合だった。`docs/protocol/service_vs_direct_ts.md`を参照。

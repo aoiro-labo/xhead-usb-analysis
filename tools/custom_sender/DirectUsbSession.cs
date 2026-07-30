@@ -36,7 +36,6 @@ namespace XHeadSender
         private const byte PIPE_ID_BULK_OUT = 0x01;
         private const int TS_PACKET_SIZE = 188;
         private const int SLICE_SIZE_BYTES = 24064;
-        private const int TS_PACKETS_PER_SLICE = SLICE_SIZE_BYTES / TS_PACKET_SIZE;
 
         private SafeUsbFileHandle _fileHandle;
         private IntPtr _winusbHandle = IntPtr.Zero;
@@ -165,38 +164,13 @@ namespace XHeadSender
             {
                 foreach (var (addr, data) in seq)
                 {
-                    // The official path reads command status before issuing RFSTART/START.
-                    // Some device registers are read-to-latch rather than passive telemetry.
-                    if (addr == 0x0600 && (data == 0x1000 || data == 1))
-                        ReadAddress(0x0600);
                     SetAddress(addr);
                     Thread.Sleep(20);
                     WriteRegister(data);
                     if (addr == 0x0600 && (data == 0x1000 || data == 1))
-                    {
                         WaitCommandFinish(data == 0x1000 ? "RFSTART" : "START");
-                        if (data == 1)
-                        {
-                            // Exact calibration-read burst observed between START completion and
-                            // the official RF-power writes.  Preserve it even though the current
-                            // DAC values are already known: these reads may latch device-side
-                            // calibration state.
-                            ReadAddress(0x0020);
-                            ReadAddress(0x1220);
-                            ReadAddress(0x1228);
-                            ReadAddress(0x1229);
-                            ReadAddress(0x1280);
-                            ReadAddress(0x1281);
-                            ReadAddress(0x1282);
-                            ReadAddress(0x1283);
-                        }
-                    }
                     else
-                    {
                         Thread.Sleep(20);
-                        if (addr == 0x0601)
-                            ReadAddress(0x0020);
-                    }
                 }
             }
             catch
@@ -243,18 +217,17 @@ namespace XHeadSender
         /// UDPデータグラムはTSパケットの整数個でなければならず、RTP/RS204には対応しない。
         /// データグラム境界をまたいで128 TS packet (24064 bytes)のUSBスライスへ再構成する。
         /// </summary>
-        public void StartUdpTsStream(int port, long bitrate = 20000000)
+        public void StartUdpTsStream(int port)
         {
             if (!DeviceOpen || !ChannelStarted) throw new InvalidOperationException("先に直接USB送出を開始してください。");
             if (StreamRunning) throw new InvalidOperationException("TSストリームは既に実行中です。");
             if (port < IPEndPoint.MinPort || port > IPEndPoint.MaxPort)
                 throw new ArgumentOutOfRangeException(nameof(port));
-            if (bitrate <= 0) throw new ArgumentOutOfRangeException(nameof(bitrate));
 
             _udpClient = new UdpClient(new IPEndPoint(IPAddress.Loopback, port));
             _streamStopRequested = false;
             _streamError = null;
-            _streamThread = new Thread(() => StreamUdpWorker(port, bitrate))
+            _streamThread = new Thread(() => StreamUdpWorker(port))
             {
                 IsBackground = true,
                 Name = "XHEAD Direct USB UDP TS"
@@ -280,7 +253,7 @@ namespace XHeadSender
             if (tspPath == null)
                 throw new FileNotFoundException("TSDuckのtsp.exeが見つかりません。TSDuckをインストールするか--ts-fileを使用してください。");
 
-            StartUdpTsStream(port, bitrate);
+            StartUdpTsStream(port);
             try
             {
                 string fullPath = Path.GetFullPath(path);
@@ -304,8 +277,8 @@ namespace XHeadSender
                 var start = new ProcessStartInfo
                 {
                     FileName = tspPath,
-                    Arguments = $"--japan -I file --infinite {QuoteArgument(fullPath)}" +
-                        plugins + $" -P regulate --pcr-synchronous --wait-min 5 -O ip --packet-burst 7 127.0.0.1:{port}",
+                    Arguments = $"--japan --add-input-stuffing 1/20 -I file --infinite {QuoteArgument(fullPath)}" +
+                        plugins + $" -P regulate --bitrate {bitrate} -O ip --packet-burst 7 127.0.0.1:{port}",
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
@@ -407,9 +380,6 @@ namespace XHeadSender
             {
                 byte[] slice = new byte[SLICE_SIZE_BYTES];
                 long bytesSent = 0;
-                long ringHandshakes = 0;
-                uint ringMinimum = uint.MaxValue;
-                uint ringMaximum = 0;
                 var timer = Stopwatch.StartNew();
                 using (var input = File.OpenRead(path))
                 {
@@ -429,16 +399,11 @@ namespace XHeadSender
                             throw new IOException($"Short bulk write: {transferred}/{slice.Length} bytes");
 
                         bytesSent += transferred;
-                        uint ringStatus = AcknowledgeRing();
-                        ringMinimum = Math.Min(ringMinimum, ringStatus);
-                        ringMaximum = Math.Max(ringMaximum, ringStatus);
-                        ringHandshakes++;
                         double targetSeconds = bytesSent * 8.0 / bitrate;
                         while (!_streamStopRequested && timer.Elapsed.TotalSeconds + 0.001 < targetSeconds)
                             Thread.Sleep(1);
                     }
                 }
-                Console.WriteLine($"[DirectUSB] リングACK: {ringHandshakes:N0}回, status={ringMinimum}..{ringMaximum}");
             }
             catch (Exception ex)
             {
@@ -447,65 +412,49 @@ namespace XHeadSender
             }
         }
 
-        private void StreamUdpWorker(int port, long bitrate)
+        private void StreamUdpWorker(int port)
         {
             long datagrams = 0;
             long packets = 0;
             long slices = 0;
-            long nullPackets = 0;
-            long ringHandshakes = 0;
-            uint ringMinimum = uint.MaxValue;
-            uint ringMaximum = 0;
             try
             {
                 byte[] slice = new byte[SLICE_SIZE_BYTES];
-                var queue = new System.Collections.Generic.Queue<byte[]>();
+                int sliceOffset = 0;
                 var sender = new IPEndPoint(IPAddress.Any, 0);
-                UdpClient udp = _udpClient;
-                if (udp == null) return;
-                udp.Client.ReceiveTimeout = 5;
-
-                // Absorb normal UDP scheduling jitter before starting the fixed-rate USB clock.
-                while (!_streamStopRequested && queue.Count < 1024)
-                    ReceiveAvailablePackets(udp, sender, queue, ref datagrams, ref packets, true);
-
-                long bytesSent = 0;
-                var timer = Stopwatch.StartNew();
                 while (!_streamStopRequested)
                 {
-                    ReceiveAvailablePackets(udp, sender, queue, ref datagrams, ref packets, false);
-                    for (int packetIndex = 0; packetIndex < TS_PACKETS_PER_SLICE; packetIndex++)
-                    {
-                        int offset = packetIndex * TS_PACKET_SIZE;
-                        if (queue.Count > 0)
-                            Buffer.BlockCopy(queue.Dequeue(), 0, slice, offset, TS_PACKET_SIZE);
-                        else
-                        {
-                            WriteNullPacket(slice, offset);
-                            nullPackets++;
-                        }
-                    }
+                    UdpClient udp = _udpClient;
+                    if (udp == null) return;
+                    byte[] datagram = udp.Receive(ref sender);
+                    if (datagram.Length == 0) continue;
+                    ValidateUdpDatagram(datagram, sender);
+                    datagrams++;
+                    packets += datagram.Length / TS_PACKET_SIZE;
 
-                    SwapUsbWordsInPlace(slice);
-                    uint transferred;
-                    if (!WinUsb_WritePipe(_winusbHandle, PIPE_ID_BULK_OUT, slice,
-                        (uint)slice.Length, out transferred, IntPtr.Zero))
+                    int sourceOffset = 0;
+                    while (sourceOffset < datagram.Length && !_streamStopRequested)
                     {
-                        if (_streamStopRequested) return;
-                        int error = Marshal.GetLastWin32Error();
-                        throw new InvalidOperationException($"WinUsb_WritePipe failed: 0x{error:X} ({error})");
+                        int copy = Math.Min(slice.Length - sliceOffset, datagram.Length - sourceOffset);
+                        Buffer.BlockCopy(datagram, sourceOffset, slice, sliceOffset, copy);
+                        sourceOffset += copy;
+                        sliceOffset += copy;
+                        if (sliceOffset != slice.Length) continue;
+
+                        SwapUsbWordsInPlace(slice);
+                        uint transferred;
+                        if (!WinUsb_WritePipe(_winusbHandle, PIPE_ID_BULK_OUT, slice,
+                            (uint)slice.Length, out transferred, IntPtr.Zero))
+                        {
+                            if (_streamStopRequested) return;
+                            int error = Marshal.GetLastWin32Error();
+                            throw new InvalidOperationException($"WinUsb_WritePipe failed: 0x{error:X} ({error})");
+                        }
+                        if (transferred != slice.Length)
+                            throw new IOException($"Short bulk write: {transferred}/{slice.Length} bytes");
+                        slices++;
+                        sliceOffset = 0;
                     }
-                    if (transferred != slice.Length)
-                        throw new IOException($"Short bulk write: {transferred}/{slice.Length} bytes");
-                    slices++;
-                    bytesSent += transferred;
-                    uint ringStatus = AcknowledgeRing();
-                    ringMinimum = Math.Min(ringMinimum, ringStatus);
-                    ringMaximum = Math.Max(ringMaximum, ringStatus);
-                    ringHandshakes++;
-                    double targetSeconds = bytesSent * 8.0 / bitrate;
-                    while (!_streamStopRequested && timer.Elapsed.TotalSeconds + 0.001 < targetSeconds)
-                        Thread.Sleep(1);
                 }
             }
             catch (Exception ex)
@@ -518,64 +467,8 @@ namespace XHeadSender
             }
             finally
             {
-                string ringStatusRange = ringHandshakes == 0 ? "n/a" : ringMinimum + ".." + ringMaximum;
-                Console.WriteLine($"[DirectUSB] UDP統計: datagrams={datagrams:N0}, input packets={packets:N0}, " +
-                    $"null fill={nullPackets:N0}, USB slices={slices:N0}, ring ACK={ringHandshakes:N0}, " +
-                    $"ring status={ringStatusRange}");
+                Console.WriteLine($"[DirectUSB] UDP統計: datagrams={datagrams:N0}, packets={packets:N0}, USB slices={slices:N0}");
             }
-        }
-
-        /// <summary>
-        /// mnservice performs this exact read-then-zero-write sequence on 0x0629 about every
-        /// 20-23 ms for the entire lifetime of a bulk TS stream.  It is not merely diagnostic:
-        /// omitting it is the largest remaining protocol difference in direct-USB streaming and
-        /// leaves the device-side ring without the producer/consumer acknowledgement used by the
-        /// official path.
-        /// </summary>
-        private uint AcknowledgeRing()
-        {
-            SetAddress(0x0629);
-            uint status = ReadRegister();
-            SetAddress(0x0629);
-            WriteRegister(0);
-            return status;
-        }
-
-        private static void ReceiveAvailablePackets(UdpClient udp, IPEndPoint sender,
-            System.Collections.Generic.Queue<byte[]> queue, ref long datagrams, ref long packets, bool waitForOne)
-        {
-            do
-            {
-                try
-                {
-                    byte[] datagram = udp.Receive(ref sender);
-                    if (datagram.Length == 0) return;
-                    ValidateUdpDatagram(datagram, sender);
-                    datagrams++;
-                    for (int offset = 0; offset < datagram.Length; offset += TS_PACKET_SIZE)
-                    {
-                        var packet = new byte[TS_PACKET_SIZE];
-                        Buffer.BlockCopy(datagram, offset, packet, 0, TS_PACKET_SIZE);
-                        queue.Enqueue(packet);
-                        packets++;
-                    }
-                    waitForOne = false;
-                }
-                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
-                {
-                    return;
-                }
-            } while (udp.Available > 0 || waitForOne);
-        }
-
-        private static void WriteNullPacket(byte[] destination, int offset)
-        {
-            destination[offset] = 0x47;
-            destination[offset + 1] = 0x1F;
-            destination[offset + 2] = 0xFF;
-            destination[offset + 3] = 0x10;
-            for (int index = offset + 4; index < offset + TS_PACKET_SIZE; index++)
-                destination[index] = 0xFF;
         }
 
         private static void ValidateUdpDatagram(byte[] datagram, IPEndPoint sender)
@@ -738,12 +631,6 @@ namespace XHeadSender
             SendControlTransfer(pkt, buffer);
             return ((uint)buffer[4] << 24) | ((uint)buffer[5] << 16) |
                    ((uint)buffer[6] << 8) | buffer[7];
-        }
-
-        private uint ReadAddress(ushort address)
-        {
-            SetAddress(address);
-            return ReadRegister();
         }
 
         private void WaitCommandFinish(string commandName)

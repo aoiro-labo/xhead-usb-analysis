@@ -244,7 +244,7 @@ namespace XHeadSender
             {
                 Minimum = 100000,
                 Maximum = 100000000,
-                Value = 7159000,
+                Value = 16851216,
                 Increment = 1000,
                 ThousandsSeparator = true,
                 Width = 115,
@@ -905,7 +905,7 @@ namespace XHeadSender
                     break;
                 default: // 5 = ISDB_T（DTV03Aで受信確認済みフルセグ）
                     items = new[] { new ComboItem(0, "DQPSK"), new ComboItem(1, "QPSK (既定)"), new ComboItem(2, "16QAM"), new ComboItem(3, "64QAM") };
-                    selectedIndex = 1;
+                    selectedIndex = 3;
                     break;
             }
             _cmbConstellation.Items.Clear();
@@ -921,7 +921,7 @@ namespace XHeadSender
             _cmbCarrier.Enabled = isDtmb;
             _cmbFrame.Enabled = isDtmb;
             if (mode == 5)
-                SelectComboValue(_cmbGuardInterval, 1);
+                SelectComboValue(_cmbGuardInterval, 2);
 
             if (isDtmb)
             {
@@ -946,7 +946,7 @@ namespace XHeadSender
                 _cmbCodeRate.Items.Add(new ComboItem(2, "3/4"));
                 _cmbCodeRate.Items.Add(new ComboItem(3, "5/6 (既定)"));
                 _cmbCodeRate.Items.Add(new ComboItem(4, "7/8"));
-                _cmbCodeRate.SelectedIndex = 3;
+                _cmbCodeRate.SelectedIndex = mode == 5 ? 2 : 3;
                 _cmbTimeInterleavce.Items.Clear();
                 _cmbTimeInterleavce.Items.Add(new ComboItem(1, "モード1"));
                 _cmbTimeInterleavce.Items.Add(new ComboItem(2, "モード2"));

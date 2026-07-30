@@ -552,7 +552,7 @@ namespace XHeadSender
                 session.StartChannel(cfg);
                 if (tsFile != null) session.StartTsStream(tsFile, bitrate);
                 else if (tsduckFile != null) session.StartTSDuckFileStream(tsduckFile, udpPort ?? 1234, bitrate);
-                else if (udpPort.HasValue) session.StartUdpTsStream(udpPort.Value, bitrate);
+                else if (udpPort.HasValue) session.StartUdpTsStream(udpPort.Value);
                 Console.WriteLine("  Holding 8s -- check RTL-SDR now...");
                 System.Threading.Thread.Sleep(8000);
                 session.StopChannel();
