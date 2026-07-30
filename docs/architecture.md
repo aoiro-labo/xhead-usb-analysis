@@ -33,7 +33,8 @@ XHEAD-USB (実機) --USB--> OFDM変調 --RF(同軸)--> (今回はRTL-SDRへル�
 - サービス: `service\mnservice.exe`
   - ネイティブバイナリ。libprotobuf.dll / abseil_dll.dll / grpc関連を使用し、gRPCサーバとして待受け。
   - `service\pegasys\` 以下はPegasys社TMPGEncエンコーダSDKのコンポーネント(映像/音声コーデック、フィルタ)。
-  - 実機とのUSB通信（生プロトコル）はこのネイティブサービス内に実装されている（未解析、要Ghidra/IDA等でのバイナリ解析）。
+  - 実機とのUSB通信はこのネイティブサービス内に実装されている。現在はGhidra/cdb解析により
+    レジスタ制御とTS bulk転送まで復元済みで、リング消費開始条件が主な未解決事項。
 
 ## 3. 重要な発見: 隠しDebugモード
 

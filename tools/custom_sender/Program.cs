@@ -110,6 +110,35 @@ namespace XHeadSender
         [STAThread]
         private static int Main(string[] args)
         {
+            if (args.Contains("--make-xbml"))
+            {
+                int index = Array.IndexOf(args, "--make-xbml");
+                if (index + 2 >= args.Length)
+                {
+                    Console.Error.WriteLine("使い方: --make-xbml <single-pid.ts> <output.xbml> [--component 0x40|0x60] [--bitrate bps]");
+                    return 2;
+                }
+                byte component = 0x40;
+                int componentIndex = Array.IndexOf(args, "--component");
+                if (componentIndex >= 0 && componentIndex + 1 < args.Length)
+                    component = Convert.ToByte(args[componentIndex + 1].Replace("0x", ""), 16);
+                uint bitrate = 1000000;
+                int bitrateIndex = Array.IndexOf(args, "--bitrate");
+                if (bitrateIndex >= 0 && bitrateIndex + 1 < args.Length)
+                    bitrate = Convert.ToUInt32(args[bitrateIndex + 1]);
+                try
+                {
+                    ushort pid = BmlContainer.Create(args[index + 1], args[index + 2], component, bitrate);
+                    Console.WriteLine($"XBMLを作成しました: {args[index + 2]} PID=0x{pid:X4} Component=0x{component:X2} Bitrate={bitrate}");
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine("XBML作成エラー: " + ex.Message);
+                    return 1;
+                }
+            }
+
             if (args.Contains("--gui"))
             {
                 System.Windows.Forms.Application.EnableVisualStyles();

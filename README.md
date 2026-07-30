@@ -44,6 +44,7 @@
 
 - **解析ドキュメント**
   - [docs/architecture.md](docs/architecture.md) — 全体アーキテクチャ、EnableDebugModeの発見、USBドライバ問題、検討した代替アプローチ
+  - [docs/roadmap.md](docs/roadmap.md) — 字幕・複数EPG・TSDuck拡張構想、XBML形式、実装ICの推測
   - [docs/protocol/README.md](docs/protocol/README.md) — gRPCプロトコルの完全リファレンス（`.proto`群 + 解説）
   - [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) — 実機検証済みの変調パラメータ一覧、Set経路の調査結果
   - [docs/gui_debug_mode_comparison.md](docs/gui_debug_mode_comparison.md) — 通常時/Debug有効時のGUIスクリーンショット比較
@@ -168,6 +169,11 @@ CLIには他にモード切替（`--dvbt`/`--atsc`/`--j83b`等、[続報12・13]
 カラーバー自己完結生成（`--colorbar`、[続報8](docs/protocol/modulation_capabilities.md)参照、
 クライアント側に既知の未解決バグあり・GUI未統合）、EPG/メディア設定の切り分けテスト
 （`--epgencode`）、直接USBバックエンド単体検証（`--directtest`）などの診断用フラグがある。
+また、TSDuck等で抽出した単一PID TSを公式形式のXBMLへ変換できる。
+
+```powershell
+XHeadSender.exe --make-xbml single-pid.ts output.xbml --component 0x40 --bitrate 1000000
+```
 
 ## 免責・注意事項
 

@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -26,7 +27,13 @@ namespace XHeadSender
 
         private readonly GuiSession _session = new GuiSession();
         private readonly DirectUsbSession _directSession = new DirectUsbSession();
-        private readonly ToolTip _toolTip = new ToolTip { AutoPopDelay = 15000, InitialDelay = 300, ReshowDelay = 100 };
+        private readonly ToolTip _toolTip = new ToolTip
+        {
+            AutoPopDelay = 8000,
+            InitialDelay = 400,
+            ReshowDelay = 100,
+            ShowAlways = true
+        };
 
         private RadioButton _rbBackendService;
         private RadioButton _rbBackendDirect;
@@ -159,12 +166,9 @@ namespace XHeadSender
             var backendLabel = new Label { Text = "接続方式:", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 4, 6, 0) };
             _rbBackendService = new RadioButton { Text = "mnservice.exe経由（既定、全機能）", AutoSize = true, Checked = true, Anchor = AnchorStyles.Left };
             _rbBackendDirect = new RadioButton { Text = "直接USB（mnservice.exe不要、変調/RF電力のみ）", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(12, 0, 0, 0) };
-            _toolTip.SetToolTip(_rbBackendService,
-                "従来通りgRPC経由でmnservice.exeに接続する。Source添付(映像/音声)・チャンネル/番組メタデータも利用可能。");
-            _toolTip.SetToolTip(_rbBackendDirect,
-                "tools/direct_usbと同じロジックでWinUSB経由で実機に直接コントロール転送を送る。" +
-                "mnservice.exe/xhead_studio.exeは事前に停止しておくこと(WinUSBインターフェースを排他保持するため)。" +
-                "変調パラメータ+RF電力設定のみ対応 -- Source添付・チャンネル/番組メタデータはmnservice.exe側のソフトウェア機能のため使えない。");
+            SetHelpTip(_rbBackendService, "映像・音声、番組情報、EPGを含む全機能を利用できます。");
+            SetHelpTip(_rbBackendDirect,
+                "mnservice.exeを使わず直接制御します。使用前にSTUDIOとmnservice.exeを終了してください。");
             _rbBackendService.CheckedChanged += BackendChanged;
             _rbBackendDirect.CheckedChanged += BackendChanged;
             backendPanel.Controls.Add(backendLabel);
@@ -192,29 +196,21 @@ namespace XHeadSender
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             _rbSourceNone = new RadioButton { Text = "RFのみ（既定、送出内容なし）", AutoSize = true, Checked = true, Margin = new Padding(0, 4, 0, 2) };
-            _toolTip.SetToolTip(_rbSourceNone, "変調器のRF出力のみ(ChannelStartだけ)。実際の映像/音声は乗せない。");
+            SetHelpTip(_rbSourceNone, "RFだけを出力します。映像・音声は含みません。");
 
             _rbSourceCapture = new RadioButton { Text = "デスクトップキャプチャ（実際の画面を送出）", AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
-            _toolTip.SetToolTip(_rbSourceCapture,
-                "実際にデスクトップ画面をキャプチャして送出内容として乗せる" +
-                "(tools/custom_sender の RunFullPipelineTest と同じ経路、動作実証済み)。");
+            SetHelpTip(_rbSourceCapture, "デスクトップ画面をエンコードして送出します。");
 
-            _rbSourceColorbar = new RadioButton { Text = "カラーバー（自己完結テストパターン、STUDIOにない機能、注意）", AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
-            _toolTip.SetToolTip(_rbSourceColorbar,
-                "外部ファイル・キャプチャデバイス不要の自己完結テスト信号(SourceTranscode)。RF出力は実証済みだが、" +
-                "mnservice.exe自身が既知のgRPCエラーを返す(続報8) -- 「ソース添付失敗、RFのみ」表示になっても" +
-                "実際にはRFが出ている可能性が高い。注意: この例外はmnservice.exeのgRPCサービス全体を" +
-                "無応答にすることがある(続報18)。使用後にサービスが応答しなくなった場合は" +
-                "mnservice.exeを再起動すること。");
+            _rbSourceColorbar = new RadioButton { Text = "カラーバー（STUDIO同等の自己完結テストパターン、注意）", AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
+            SetHelpTip(_rbSourceColorbar,
+                "自己完結テスト信号です。応答停止時はmnservice.exeを再起動してください。");
 
             var urlRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0, 2, 0, 4) };
             _rbSourceUrl = new RadioButton { Text = "動画ファイル:", AutoSize = true, Anchor = AnchorStyles.Left };
             _txtUrlPath = new TextBox { Width = 320, Anchor = AnchorStyles.Left, Margin = new Padding(4, 3, 4, 3) };
             _btnBrowseUrl = new Button { Text = "参照...", Width = 70, Anchor = AnchorStyles.Left };
             _btnBrowseUrl.Click += BtnBrowseUrl_Click;
-            _toolTip.SetToolTip(_rbSourceUrl,
-                "指定した動画/TSファイルを実際に送出する(SourceUrl)。2026-07-26に再検証して動作確認済み" +
-                "(以前はContent取得の実装ミスで断念していた)。");
+            SetHelpTip(_rbSourceUrl, "指定した動画またはTSファイルを送出します。");
             urlRow.Controls.Add(_rbSourceUrl);
             urlRow.Controls.Add(_txtUrlPath);
             urlRow.Controls.Add(_btnBrowseUrl);
@@ -345,12 +341,8 @@ namespace XHeadSender
             mediaLayout.Controls.Add(bmlLabel, 0, bmlRow_);
             mediaLayout.Controls.Add(bmlRow, 1, bmlRow_);
             mediaLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _toolTip.SetToolTip(bmlLabel,
-                "mPSEncodeParam.BMLFile(FieldID=38)。データ放送/字幕再注入用の.xbmlコンテナへの" +
-                "ローカルパス。空欄なら未使用(通常はこれでよい)。xBMLFile.csの独自バイナリ形式" +
-                "(続報9参照、ARIB STD-B35のBCMLとは別物)。実際に有効なコンテンツかはビットレベル" +
-                "未検証(続報11参照)。");
-            _toolTip.SetToolTip(_txtBMLFile, "空欄なら未使用。");
+            SetHelpTip(bmlLabel, "データ放送・字幕用の独自.xbmlです。通常の.tsは指定できません。");
+            SetHelpTip(_txtBMLFile, "空欄なら使用しません。");
 
             // 2026-07-27 (続報21): STUDIO本体のGUIを一通り操作して発見した、これまで未実装
             // だった詳細エンコーダ設定。STUDIO側も「メディア設定」(上のmediaLayout相当)とは
@@ -575,6 +567,32 @@ namespace XHeadSender
             return t;
         }
 
+        private void SetHelpTip(Control control, string text)
+        {
+            const int columns = 38;
+            var formatted = new StringBuilder(text.Length + text.Length / columns);
+            int lineLength = 0;
+            foreach (char c in text)
+            {
+                if (c == '\r') continue;
+                if (c == '\n')
+                {
+                    formatted.AppendLine();
+                    lineLength = 0;
+                    continue;
+                }
+                if (lineLength >= columns && (c == ' ' || c == '、' || c == '。' || c == '('))
+                {
+                    formatted.AppendLine();
+                    lineLength = 0;
+                    if (c == ' ') continue;
+                }
+                formatted.Append(c);
+                lineLength++;
+            }
+            _toolTip.SetToolTip(control, formatted.ToString());
+        }
+
         private NumericUpDown AddNumeric(TableLayoutPanel layout, string label, decimal min, decimal max, decimal value, string tooltip)
         {
             int row = layout.RowStyles.Count;
@@ -584,8 +602,8 @@ namespace XHeadSender
             var num = new NumericUpDown { Minimum = min, Maximum = max, Value = value, Width = 110, Anchor = AnchorStyles.Left };
             layout.Controls.Add(num, 1, row);
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _toolTip.SetToolTip(lbl, tooltip);
-            _toolTip.SetToolTip(num, tooltip);
+            SetHelpTip(lbl, tooltip);
+            SetHelpTip(num, tooltip);
             return num;
         }
 
@@ -607,8 +625,8 @@ namespace XHeadSender
             cmb.SelectedIndex = selectedIndex;
             layout.Controls.Add(cmb, 1, row);
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _toolTip.SetToolTip(lbl, tooltip);
-            _toolTip.SetToolTip(cmb, tooltip);
+            SetHelpTip(lbl, tooltip);
+            SetHelpTip(cmb, tooltip);
             return cmb;
         }
 
@@ -621,8 +639,8 @@ namespace XHeadSender
             var txt = new TextBox { Text = value, MaxLength = maxLength, Width = 110, Anchor = AnchorStyles.Left };
             layout.Controls.Add(txt, 1, row);
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _toolTip.SetToolTip(lbl, tooltip);
-            _toolTip.SetToolTip(txt, tooltip);
+            SetHelpTip(lbl, tooltip);
+            SetHelpTip(txt, tooltip);
             return txt;
         }
 
@@ -635,8 +653,8 @@ namespace XHeadSender
             var chk = new CheckBox { Checked = value, AutoSize = true, Anchor = AnchorStyles.Left };
             layout.Controls.Add(chk, 1, row);
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _toolTip.SetToolTip(lbl, tooltip);
-            _toolTip.SetToolTip(chk, tooltip);
+            SetHelpTip(lbl, tooltip);
+            SetHelpTip(chk, tooltip);
             return chk;
         }
 

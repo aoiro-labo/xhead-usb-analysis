@@ -1601,6 +1601,20 @@ bulk OUTスライスへ再構成する。RTPおよびRS204は現時点では明�
 `Present=True / Status=OK`。したがってTSDuckとの入力インターフェースと安全な停止は動作確認
 済みだが、連続した映像TS送出の完成条件は引き続きデバイス側リング制御の解読である。
 
+### 続報28 (2026-07-30): XBML writer実装とカラーバー記述の訂正
+
+逆コンパイル済み`xBMLFile.cs`を再確認し、XBML素材が「単一PIDだけを含む188-byte TS」である
+こと、公式writerが受理するComponent Tagが`0x40`/`0x60`だけであること、固定ES descriptorを
+含む正確なバイナリ配置を確定した。`tools/custom_sender`へ`--make-xbml`を追加し、TSDuckで
+PID 0x0100だけを抽出した8,073,472-byte TSから8,073,572-byte XBMLを正常生成した。
+これで字幕・データ素材を「TSDuckでPID抽出→XBML化→BMLFile指定」する試験経路ができた。
+ただしComponent Tagの受信機上の意味と実多重化はまだ未実証である。
+
+またGUIにあった「カラーバーはSTUDIOにない機能」という記述は誤りだった。
+`uiMedia.pbColorbar`、`xHeadColorbar`、`xSourceMode.Colorbar`が公式GUIに明確に存在するため、
+「STUDIO同等の自己完結テストパターン」へ訂正した。本ツール独自なのは機能そのものではなく、
+同じ`SourceTranscode`経路を独自クライアントから呼び出している点である。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に
