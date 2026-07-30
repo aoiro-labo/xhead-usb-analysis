@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using Grpc.Core;
@@ -36,6 +38,7 @@ namespace XHeadSender
             if (Connected) throw new InvalidOperationException("既に接続済みです。");
 
             Program.EnsureNativeDllPathConfigured();
+            EnsureMnserviceRunning();
 
             Console.WriteLine($"[GUI] connecting to {Program.ServiceAddress} ...");
             _channel = new Channel(Program.ServiceAddress, ChannelCredentials.Insecure);
@@ -57,7 +60,7 @@ namespace XHeadSender
                 _client = null;
                 _channel = null;
                 throw new InvalidOperationException(
-                    "mnservice.exe に接続できません。XHEAD-STUDIO (xhead_studio.exe) を起動してサービスを立ち上げてください。");
+                    "mnservice.exe に接続できません。単体起動にも失敗した可能性があります。ログとlocalhost:50051を確認してください。");
             }
             Console.WriteLine($"[GUI] connectService Result={response.Result}");
             if (response.Result != msResult.ResultSuccess || response.ParamCase != msResponse.ParamOneofCase.Client)
@@ -87,6 +90,34 @@ namespace XHeadSender
                 throw new InvalidOperationException("変調出力(ObjectOutputModulation)が見つかりません。実機が接続されているか確認してください。");
             }
             Console.WriteLine($"[GUI] connected. ClientHandle={_msClient.HandleID} ModulationOutput={_outputHandle}");
+        }
+
+        private static void EnsureMnserviceRunning()
+        {
+            if (Process.GetProcessesByName("mnservice").Any())
+                return;
+
+            string studioRoot = Environment.GetEnvironmentVariable("XHEAD_STUDIO_DIR")
+                                ?? @"C:\Program Files\Micomsoft\XHEAD-STUDIO";
+            string servicePath = Path.Combine(studioRoot, "service", "mnservice.exe");
+            if (!File.Exists(servicePath))
+                throw new FileNotFoundException("mnservice.exeが見つかりません。XHEAD_STUDIO_DIRまたはインストール先を確認してください。", servicePath);
+
+            Console.WriteLine("[GUI] mnservice.exeを単体起動します...");
+            Process process = Process.Start(new ProcessStartInfo
+            {
+                FileName = servicePath,
+                WorkingDirectory = Path.GetDirectoryName(servicePath),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+            if (process == null)
+                throw new InvalidOperationException("mnservice.exeを起動できませんでした。");
+            Thread.Sleep(2000);
+            if (process.HasExited)
+                throw new InvalidOperationException($"mnservice.exeが起動直後に終了しました (exit={process.ExitCode})。");
+            Console.WriteLine($"[GUI] mnservice.exe起動完了 (PID={process.Id})。");
         }
 
         public void StartChannel(ModulationConfig cfg)

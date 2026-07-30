@@ -121,11 +121,18 @@ dotnet build
 # XHEAD-STUDIO (xhead_studio.exe) を一度起動してサービスを立ち上げた状態で:
 dotnet run                              # CLI: 疎通確認・プロパティツリーダンプ・フルパイプラインテスト(デスクトップキャプチャ送出)
 dotnet run -- --sourceurl [ファイルパス]  # CLI: 動画/TSファイルを指定して送出
-./bin/Debug/net472/XHeadSender.exe --gui   # GUI: 接続方式(mnservice.exe経由/直接USB)・実TS・変調パラメータ+RF電力・
+./Start-GUI.ps1                            # Releaseを再ビルドしてGUI起動（古いDebug exeの誤起動を防止）
+./bin/Release/net472/XHeadSender.exe --gui # ビルド済みGUIを直接起動する場合
+                                            # GUI: 接続方式(mnservice.exe経由/直接USB)・実TS・変調パラメータ+RF電力・
                                             # チャンネル情報・ソースを自由に設定して送出/停止
                                             # (net472はネイティブexeなので直接実行する。`dotnet <exe>`は
                                             # hostpolicy.dllが無いというエラーで失敗するので使わないこと)
 ```
+
+GUIのログ先頭には、実際に起動したexeの絶対パスとビルド更新日時を表示する。直接USBを選んだ
+のに旧「Source添付は利用できません」という文面が出る場合は古いDebug版を起動しているため、
+`Start-GUI.ps1`から起動し直す。mnservice.exe経由ではGUIが公式インストール先の
+`service\mnservice.exe`を単体起動するため、XHEAD-STUDIO本体を事前起動する必要はない。
 
 直接USB CLIはTS入力を3通り選べる。内蔵ファイル送信はTSDuck不要、UDP入力は任意の
 TSDuckパイプラインと接続でき、`--tsduck-file`は本ツール自身がインストール済みの

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -141,8 +142,10 @@ namespace XHeadSender
 
             Console.SetOut(new TextBoxWriter(_txtLog));
             Console.WriteLine("XHeadSender GUI 起動。");
-            Console.WriteLine("接続方式「mnservice.exe経由」を使う場合は、事前に XHEAD-STUDIO (xhead_studio.exe) を" +
-                "起動してサービスを立ち上げておくこと。");
+            string executablePath = typeof(MainForm).Assembly.Location;
+            Console.WriteLine($"実行ファイル: {executablePath}");
+            Console.WriteLine($"ビルド更新日時: {File.GetLastWriteTime(executablePath):yyyy-MM-dd HH:mm:ss}");
+            Console.WriteLine("接続方式「mnservice.exe経由」では、未起動ならGUIがmnservice.exeを単体起動します。STUDIOの起動は不要です。");
             Console.WriteLine("接続方式「直接USB」を使う場合は、逆に xhead_studio.exe / mnservice.exe が" +
                 "起動していないことを確認すること(WinUSBインターフェースを排他保持するため)。");
             Console.WriteLine("接続方式を選んだら「接続」を押してください。");
