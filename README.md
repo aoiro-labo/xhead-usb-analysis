@@ -129,6 +129,14 @@ dotnet run -- --sourceurl [ファイルパス]  # CLI: 動画/TSファイルを�
                                             # hostpolicy.dllが無いというエラーで失敗するので使わないこと)
 ```
 
+GUIには`mnservice.exe`の「サービス起動」「サービス停止」ボタンがあり、サービス経由の
+「接続」でも未起動なら単体起動してUSB Output登録を待つ。RFを出さず接続と変調Output検出だけを
+確認する場合は`XHeadSender.exe --servicecheck`を使える。失敗時もcontrollerセッションを
+切断するため、再試行で`controller already exists`を残さない。
+
+直接USBのISDB-T既定値は、DTV03A-1TUで実際にフルセグ復調できた
+64QAM・FFT 8k・符号化率3/4・GI 1/8・Time Interleave 3・16,851,216 bit/sである。
+
 GUIのログ先頭には、実際に起動したexeの絶対パスとビルド更新日時を表示する。直接USBを選んだ
 のに旧「Source添付は利用できません」という文面が出る場合は古いDebug版を起動しているため、
 `Start-GUI.ps1`から起動し直す。mnservice.exe経由ではGUIが公式インストール先の

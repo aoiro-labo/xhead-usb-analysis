@@ -38,7 +38,7 @@ namespace XHeadSender
             if (Connected) throw new InvalidOperationException("既に接続済みです。");
 
             Program.EnsureNativeDllPathConfigured();
-            EnsureMnserviceRunning();
+            StartMnservice();
 
             Console.WriteLine($"[GUI] connecting to {Program.ServiceAddress} ...");
             _channel = new Channel(Program.ServiceAddress, ChannelCredentials.Insecure);
@@ -86,15 +86,17 @@ namespace XHeadSender
             }
             if (_outputHandle == 0)
             {
-                _client = null;
+                Disconnect();
                 throw new InvalidOperationException("変調出力(ObjectOutputModulation)が見つかりません。実機が接続されているか確認してください。");
             }
             Console.WriteLine($"[GUI] connected. ClientHandle={_msClient.HandleID} ModulationOutput={_outputHandle}");
         }
 
-        private static void EnsureMnserviceRunning()
+        public static bool IsMnserviceRunning => Process.GetProcessesByName("mnservice").Any();
+
+        public static void StartMnservice()
         {
-            if (Process.GetProcessesByName("mnservice").Any())
+            if (IsMnserviceRunning)
                 return;
 
             string studioRoot = Environment.GetEnvironmentVariable("XHEAD_STUDIO_DIR")
@@ -114,10 +116,28 @@ namespace XHeadSender
             });
             if (process == null)
                 throw new InvalidOperationException("mnservice.exeを起動できませんでした。");
-            Thread.Sleep(2000);
+            // The gRPC listener appears before USB Output registration has completed.
+            // Give the standalone service the same initialization window STUDIO normally provides.
+            Thread.Sleep(7000);
             if (process.HasExited)
                 throw new InvalidOperationException($"mnservice.exeが起動直後に終了しました (exit={process.ExitCode})。");
             Console.WriteLine($"[GUI] mnservice.exe起動完了 (PID={process.Id})。");
+        }
+
+        public static void StopMnservice()
+        {
+            Process[] processes = Process.GetProcessesByName("mnservice");
+            foreach (Process process in processes)
+            {
+                Console.WriteLine($"[GUI] mnservice.exeを停止します (PID={process.Id})...");
+                process.Kill();
+                if (!process.WaitForExit(5000))
+                    throw new TimeoutException($"mnservice.exe PID={process.Id}が5秒以内に終了しませんでした。");
+                process.Dispose();
+            }
+            Console.WriteLine(processes.Length == 0
+                ? "[GUI] mnservice.exeは起動していません。"
+                : "[GUI] mnservice.exeを停止しました。");
         }
 
         public void StartChannel(ModulationConfig cfg)

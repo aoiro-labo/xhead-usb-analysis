@@ -203,6 +203,21 @@ namespace XHeadSender
                 return 0;
             }
 
+            if (args.Contains("--servicecheck"))
+            {
+                var session = new GuiSession();
+                try
+                {
+                    session.Connect();
+                    Console.WriteLine("mnservice.exe単体起動・変調出力検出: OK");
+                    return 0;
+                }
+                finally
+                {
+                    session.Disconnect();
+                }
+            }
+
             if (args.Contains("--directtest"))
             {
                 uint testMode = 5;

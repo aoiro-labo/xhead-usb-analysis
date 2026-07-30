@@ -45,6 +45,8 @@ namespace XHeadSender
         private Button _btnStart;
         private Button _btnStop;
         private Button _btnDisconnect;
+        private Button _btnStartService;
+        private Button _btnStopService;
         private RadioButton _rbSourceNone;
         private RadioButton _rbSourceCapture;
         private RadioButton _rbSourceColorbar;
@@ -194,14 +196,20 @@ namespace XHeadSender
             _btnStart = new Button { Text = "② 送出開始", Width = 100, Enabled = false };
             _btnStop = new Button { Text = "③ 送出停止", Width = 100, Enabled = false };
             _btnDisconnect = new Button { Text = "④ 切断", Width = 100, Enabled = false };
+            _btnStartService = new Button { Text = "サービス起動", Width = 95 };
+            _btnStopService = new Button { Text = "サービス停止", Width = 95 };
             _btnConnect.Click += BtnConnect_Click;
             _btnStart.Click += BtnStart_Click;
             _btnStop.Click += BtnStop_Click;
             _btnDisconnect.Click += BtnDisconnect_Click;
+            _btnStartService.Click += BtnStartService_Click;
+            _btnStopService.Click += BtnStopService_Click;
             btnPanel.Controls.Add(_btnConnect);
             btnPanel.Controls.Add(_btnStart);
             btnPanel.Controls.Add(_btnStop);
             btnPanel.Controls.Add(_btnDisconnect);
+            btnPanel.Controls.Add(_btnStartService);
+            btnPanel.Controls.Add(_btnStopService);
 
             var sourceLayout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true, Padding = new Padding(10, 10, 6, 10) };
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -468,7 +476,7 @@ namespace XHeadSender
             _cmbConstellation = AddCombo(modLayout, "変調方式", new[]
             {
                 new ComboItem(0, "DQPSK"),
-                new ComboItem(1, "QPSK (既定)"),
+                new ComboItem(1, "QPSK"),
                 new ComboItem(2, "16QAM"),
                 new ComboItem(3, "64QAM"),
             }, 1, "変調方式のキャリア変調(Constellation)。選択したModeによって有効な値が変わる。");
@@ -485,14 +493,14 @@ namespace XHeadSender
                 new ComboItem(0, "1/2"),
                 new ComboItem(1, "2/3"),
                 new ComboItem(2, "3/4"),
-                new ComboItem(3, "5/6 (既定)"),
+                new ComboItem(3, "5/6"),
                 new ComboItem(4, "7/8"),
             }, 3, "畳み込み符号の符号化率。値が大きいほど伝送効率は上がるが誤り耐性は下がる。");
             _cmbGuardInterval = AddCombo(modLayout, "ガードインターバル", new[]
             {
                 new ComboItem(0, "1/32"),
-                new ComboItem(1, "1/16 (既定)"),
-                new ComboItem(2, "1/8"),
+                new ComboItem(1, "1/16"),
+                new ComboItem(2, "1/8 (フルセグ既定)"),
                 new ComboItem(3, "1/4"),
             }, 1, "シンボル間のガードインターバル比。マルチパス耐性と伝送効率のトレードオフ。");
             _cmbTimeInterleavce = AddCombo(modLayout, "時間インターリーブ", new[]
@@ -809,6 +817,8 @@ namespace XHeadSender
 
         private void BackendChanged(object sender, EventArgs e)
         {
+            if (sender is RadioButton changed && !changed.Checked)
+                return;
             bool direct = UseDirectBackend;
             _sourceTab.Enabled = true;
             _metaTab.Enabled = true;
@@ -893,9 +903,9 @@ namespace XHeadSender
                     items = new[] { new ComboItem(2, "64QAM (既定)"), new ComboItem(4, "256QAM") };
                     selectedIndex = 0;
                     break;
-                default: // 5 = ISDB_T
+                default: // 5 = ISDB_T（DTV03Aで受信確認済みフルセグ）
                     items = new[] { new ComboItem(0, "DQPSK"), new ComboItem(1, "QPSK (既定)"), new ComboItem(2, "16QAM"), new ComboItem(3, "64QAM") };
-                    selectedIndex = 1;
+                    selectedIndex = 3;
                     break;
             }
             _cmbConstellation.Items.Clear();
@@ -910,6 +920,8 @@ namespace XHeadSender
             _cmbGuardInterval.Enabled = hasOfdmFields;
             _cmbCarrier.Enabled = isDtmb;
             _cmbFrame.Enabled = isDtmb;
+            if (mode == 5)
+                SelectComboValue(_cmbGuardInterval, 2);
 
             if (isDtmb)
             {
@@ -934,7 +946,7 @@ namespace XHeadSender
                 _cmbCodeRate.Items.Add(new ComboItem(2, "3/4"));
                 _cmbCodeRate.Items.Add(new ComboItem(3, "5/6 (既定)"));
                 _cmbCodeRate.Items.Add(new ComboItem(4, "7/8"));
-                _cmbCodeRate.SelectedIndex = 3;
+                _cmbCodeRate.SelectedIndex = mode == 5 ? 2 : 3;
                 _cmbTimeInterleavce.Items.Clear();
                 _cmbTimeInterleavce.Items.Add(new ComboItem(1, "モード1"));
                 _cmbTimeInterleavce.Items.Add(new ComboItem(2, "モード2"));
@@ -971,6 +983,54 @@ namespace XHeadSender
                 _btnConnect.Enabled = true;
                 _rbBackendService.Enabled = true;
                 _rbBackendDirect.Enabled = true;
+            }
+        }
+
+        private async void BtnStartService_Click(object sender, EventArgs e)
+        {
+            if (_directSession.DeviceOpen)
+            {
+                Console.WriteLine("サービス起動前に直接USBを切断してください。");
+                return;
+            }
+            _btnStartService.Enabled = false;
+            try
+            {
+                await Task.Run(() => GuiSession.StartMnservice());
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("サービス起動失敗: " + ex.Message);
+            }
+            finally
+            {
+                _btnStartService.Enabled = true;
+            }
+        }
+
+        private async void BtnStopService_Click(object sender, EventArgs e)
+        {
+            _btnStopService.Enabled = false;
+            try
+            {
+                if (_session.Connected)
+                    await Task.Run(() => _session.Disconnect());
+                await Task.Run(() => GuiSession.StopMnservice());
+                SetStatus("未接続（サービス停止）", Color.DimGray);
+                _btnConnect.Enabled = true;
+                _btnStart.Enabled = false;
+                _btnStop.Enabled = false;
+                _btnDisconnect.Enabled = false;
+                _rbBackendService.Enabled = true;
+                _rbBackendDirect.Enabled = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("サービス停止失敗: " + ex.Message);
+            }
+            finally
+            {
+                _btnStopService.Enabled = true;
             }
         }
 
