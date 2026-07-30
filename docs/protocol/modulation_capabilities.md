@@ -480,11 +480,14 @@ rcx/r8/r9を直接ダンプして復元）を組み合わせ、[tools/direct_usb
 [tools/rtlsdr_analysis](../../tools/rtlsdr_analysis)で既知の限界と同じ。
 
 追試として、標準的なnull-TSパケット列をバルクOUTへ3秒間・約32MB送出する`--stream`
-モードも試したが、フローコントロール通知（`0x4A`/`0x4E`）を伴わない生送出では
+モードも試したが、当時「フローコントロール通知」と解釈していた周期的な
+`0x4A`/`0x4E`読み出しを伴わない生送出では
 RTL-SDRで観測可能な変化は一切なかった（[tools/direct_usb/README.md](../../tools/direct_usb/README.md)
 「続報」参照）。TSデータの有無に関わらず同じRF出力が観測されており、レジスタ設定
 （周波数・変調方式等）だけで決まる搬送波/アイドルパターンを見ている可能性が高いという
-推測を補強する結果——ただし通知なしでは無視されるだけの可能性も残り、未確定。
+推測を補強する結果。ただし後の解析で`0x4A`/`0x4E`は通知ではなく汎用レジスタ読み出しと
+判明し、さらにこの試験は約80Mbit/sの無制限送信だった。リングのオーバーランという交絡因子が
+あるため、現在は「通知不足が原因」という解釈を撤回し、ビットレート制御版での再検証待ち。
 
 ### 続報8 (2026-07-26): 第三のSourceMode「Transcode」でカラーバー/サイントーンを自己完結生成
 
@@ -901,7 +904,7 @@ ready/ACKビットを待ち続けて戻ってこない）とで、ネイティ�
 
 **【追記】ユーザー確認の上でDVB_T2も実施——ハングせず、安全に拒否された。** 結果は上表の
 通り`ErrMessage=modulation param invalid`（J83Aと同一パターン）。これで8モード全てを
-実施済みとなり、最終結果は「成功=DVB_T/ATSC/J83B（3）」「安全な拒否=J83A/DVB_T2（2）」
+実施済みとなり、この時点での結果は「成功=DVB_T/ATSC/J83B（3）」「安全な拒否=J83A/DVB_T2（2）」
 「サービスハング=DTMB/J83C（2）」「ISDB_T=元々の動作モード（1）」の内訳で確定。フィールド
 数（DVB_T2=16、J83C=1）とハング有無に相関がないことも改めて裏付けられた——「値検証で
 弾かれるか、レジスタ書き込み後にチップ応答待ちでハングするか」は各モードの実装ごとの
@@ -1230,7 +1233,8 @@ ISDB_Tのみさらに`TimeInterleavce`も送る、ATSC/J83BはConstellationの�
   判別不能。ビットレベルの復調（実際のISDB-T/DVB-T復調器での受信、または詳細なIQ解析）を
   行わない限り、どちらが正しいか確定できない。
 - 未確認: この「`0x680`=Mode raw値・フィールド集合はMode依存」という理解が`J83A`/`DTMB`/
-  `J83C`/`DVB_T2`にも当てはまるかは未検証（上記の理由により意図的に未実施）。
+  `J83C`/`DVB_T2`にも当てはまるかは、この時点では未検証だった。後の続報22・24で
+  J83A/DTMB/J83Cは`direct_usb`から成功し、未解決はDVB_T2のみとなった。
 
 再現コード: `tools/direct_usb/Program.cs`の`RunConfigureSequence`（`--mode`引数）。
 RF実測データ: `tools/rtlsdr_analysis/rtlsdr_dvbt_mode0_scan1/2.csv`・
@@ -1240,8 +1244,8 @@ RF実測データ: `tools/rtlsdr_analysis/rtlsdr_dvbt_mode0_scan1/2.csv`・
 ### 続報20 (2026-07-27): 続報19のMode切替を`tools/custom_sender`のGUI「直接USB」バックエンドにも統合
 
 続報19で`tools/direct_usb`のCLIに追加した`--mode`対応を、`tools/custom_sender`のGUIにも
-配線した。「変調/RF電力設定」タブに新しい「Mode（直接USB専用）」コンボ（DVB_T/ATSC/J83B/
-ISDB_T、実機で安全と確認済みの4値のみ——CLIの`--force-untested-mode`のような抜け道は
+配線した。この時点では「変調/RF電力設定」タブに新しい「Mode（直接USB専用）」コンボ
+（DVB_T/ATSC/J83B/ISDB_Tの4値——CLIの`--force-untested-mode`のような抜け道は
 GUIには設けていない）を追加し、選択に応じて:
 
 - 「変調方式」コンボの選択肢をそのModeが実際に持つConstellation enumへ動的に差し替える

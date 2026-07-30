@@ -8,6 +8,17 @@
 
 ## ステータス
 
+### 現在地
+
+- `mnservice.exe`非依存の直接USB制御で、DVB_T / J83A / ATSC / J83B / DTMB / ISDB_T /
+  J83CのRF送出・停止を実機確認済み
+- DVB_T2はパラメータ検証と生レジスタ対応が未解決
+- 独自GUIは、公式サービス経由のフル機能と直接USB経由の変調・RF設定を切り替え可能
+- 次の主要課題は、実TSを適正ビットレートで直接USB送出し、変調器へ取り込まれるか確認すること
+
+<details>
+<summary>項目別の詳細ステータスを開く</summary>
+
 | 項目 | 状態 | 詳細 |
 |---|---|---|
 | アーキテクチャ解析（GUI⇔サービス、gRPC構成） | 完了 | [docs/architecture.md](docs/architecture.md) |
@@ -26,7 +37,9 @@
 | チャンネル/番組メタデータ（サービス名・NetworkID等）の変更 | **完了** | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報14」— GUIタブ実装後、`mMTSChannelParam`/`mMTSProgramParam`を明示的に上書きすると`ChannelStart`が`mnservice.exe`をハングさせる問題を発見し一時撤去。原因調査でXHEAD-STUDIO自身も同じ設定値で同様にハングすることを確認、プロトコル/フィールドの問題ではなく**長時間の検証作業によるUSB接続の劣化**と判明——実機を物理的に抜き差ししたところ即座に解消し、STUDIO・本ツールとも正常に送出できるようになった。GUI機能を復活済み（`tools/custom_sender`「チャンネル/番組情報」タブ）。DTMB/J83Cのハング（続報13）は抜き差し後も再現し、こちらは本物のモード固有バグと確認 |
 | RTL-SDRループバックでの実信号検証 | 完了 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出前後で470〜476MHz帯（6MHz幅、ISDB-Tの帯域幅と一致）に約38dBのパワー上昇を実測、送出停止で消失することも確認。設定した中心周波数473MHzとも一致 |
 | `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 検証中 | [tools/usb_capture](tools/usb_capture) — バルク転送(24064バイト=MPEG-TS 188バイト×128、224スライスのリングバッファ)の生TSフレーミングを確認。コントロール転送は`mhal_modulation.cc`が使う「アドレス設定→データ読み書き」の汎用レジスタバスと判明。**ISDB-T変調パラメータ（Frequency/Bandwidth/Constellation/FFT/CodeRate/GuardInterval/TimeInterleavce）のレジスタアドレスをほぼ完全にマップ化**、DACGainも確定。フルライフサイクルキャプチャで新たに`0x0020`台（デバイス識別情報）を発見、`0x0629`はリングバッファ占有量ステータスの可能性が高いと判明。`0x1280`〜`0x1283`は`mazo::mbroadcast::mCalibration`という専用クラスによるRF較正データ読み出し機構と判明（**PAGainは直接レジスタに書かれず、この較正データと突き合わせて使われるソフトウェア側パラメータらしいと判明**）。バルク転送ヘッダは未解読 |
-| `mnservice.exe`を介さない直接制御（DLL/サービス完全非依存） | **完了・GUI統合済み・非ISDB-Tモード5種を実証・STUDIOを超える送出能力を確認** | [tools/direct_usb](tools/direct_usb) — WinUSBで実機に直接接続し、解読したレジスタバスで読み書きを実証。`CmdChannelStart`相当のフル設定シーケンスを`--configure`で再現し、`mnservice.exe`を一切起動しない状態で変調器を駆動、RTL-SDRループバックで**実際にRF電力上昇（+33〜44dB、複数回のスキャンで再現）を確認**。送出停止シーケンス（`--stop`、`0x0600=0x2000`、RTL-SDRで停止を実測確認）も新規発見・CLI/GUI両方に統合。このロジックを`tools/custom_sender`のGUIにも統合（`DirectUsbSession.cs`、「接続方式」トグルで`mnservice.exe経由`⇔`直接USB`を切替可能）。**続報17・19**: `0x0680`がモード選択レジスタ（`Mode`のraw enum値と一致）と新たに判明し、`--mode`引数を追加。DVB_T/ATSC/J83Bの3モードで`mnservice.exe`非依存の送出に成功。**続報22（STUDIOを超える成果）**: `DTMB`/`J83C`は`mnservice.exe`経由だとサービス全体をハングさせる既知のバグがあるが、`mnservice.exe`を一切経由しない`direct_usb`単体であればハングせず正常に送出できることを実証（各RTL-SDRでRF出力を実測、DTMBは再現性も確認済み）——STUDIO本体では実現不可能なモードを独自ツールでのみ実現した、本プロジェクトの目標の明確な達成例。**続報24**: Ghidra静的解析で`J83A`の拒否原因も特定（mnservice.exe独自のビットレート検証が設定不能なパラメータを要求するソフトウェア側の不備、実機の制約ではない）、`direct_usb`単体でRF出力に成功。これで7モード（DVB_T/J83A/ATSC/J83B/DTMB/ISDB_T/J83C）が`--force-untested-mode`なしで`direct_usb`から送出可能——未検証のまま残るのは`DVB_T2`のみ（規格準拠パラメータ検証で拒否、正しい組み合わせ未特定）。**続報20・23**: Mode切替をGUIの「直接USB」バックエンドにも統合済み——6モード選択可能（DTMB専用のCarrier/Frameフィールドも追加、RTL-SDRで実際のRF出力を確認済み） |
+| `mnservice.exe`を介さない直接制御（DLL/サービス完全非依存） | **完了・GUI統合済み・非ISDB-Tモード6種を実証・STUDIOを超える送出能力を確認** | [tools/direct_usb](tools/direct_usb) — WinUSBで実機に直接接続し、解読したレジスタバスで読み書きを実証。`CmdChannelStart`相当のフル設定シーケンスを`--configure`で再現し、`mnservice.exe`を一切起動しない状態で変調器を駆動、RTL-SDRループバックで**実際にRF電力上昇（+33〜44dB、複数回のスキャンで再現）を確認**。送出停止シーケンス（`--stop`、`0x0600=0x2000`、RTL-SDRで停止を実測確認）も新規発見・CLI/GUI両方に統合。このロジックを`tools/custom_sender`のGUIにも統合（`DirectUsbSession.cs`、「接続方式」トグルで`mnservice.exe経由`⇔`直接USB`を切替可能）。**続報17・19**: `0x0680`がモード選択レジスタ（`Mode`のraw enum値と一致）と新たに判明し、`--mode`引数を追加。DVB_T/ATSC/J83Bの3モードで`mnservice.exe`非依存の送出に成功。**続報22（STUDIOを超える成果）**: `DTMB`/`J83C`は`mnservice.exe`経由だとサービス全体をハングさせる既知のバグがあるが、`mnservice.exe`を一切経由しない`direct_usb`単体であればハングせず正常に送出できることを実証（各RTL-SDRでRF出力を実測、DTMBは再現性も確認済み）——STUDIO本体では実現不可能なモードを独自ツールでのみ実現した、本プロジェクトの目標の明確な達成例。**続報24**: Ghidra静的解析で`J83A`の拒否原因も特定（mnservice.exe独自のビットレート検証が設定不能なパラメータを要求するソフトウェア側の不備、実機の制約ではない）、`direct_usb`単体でRF出力に成功。これで7モード（DVB_T/J83A/ATSC/J83B/DTMB/ISDB_T/J83C）が`--force-untested-mode`なしで`direct_usb`から送出可能——未検証のまま残るのは`DVB_T2`のみ（規格準拠パラメータ検証で拒否、正しい組み合わせ未特定）。**続報20・23**: Mode切替をGUIの「直接USB」バックエンドにも統合済み——6モード選択可能（DTMB専用のCarrier/Frameフィールドも追加、RTL-SDRで実際のRF出力を確認済み） |
+
+</details>
 
 ## クイックリンク
 
@@ -54,7 +67,7 @@ XHEAD-STUDIOは **GUI (`xhead_studio.exe`)** と **バックグラウンドサ�
   <br><sub>左: 通常時／右: EnableDebugMode有効時（変調設定タブ）</sub>
 </p>
 
-さらに、GUI⇔サービス間の通信は固定メッセージではなく汎用的なプロパティツリー方式であり、公式GUIが一切参照していない設定項目がサービス側に存在する。実機から読み出した変調パラメータの完全なFieldID一覧は [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) にまとめてあり、ISDB-T以外にDVB-T2/ATSC/DTMB等のサブ構造体まで存在することが判明している。実際に8モード全ての切替を実機で試したところ、`DVB_T`/`ATSC`/`J83B`は`ChannelStart`まで完走しISDB_Tと同水準のRF出力を確認できた（変調チップ自体は多規格対応）一方、`DTMB`/`J83C`は`mnservice.exe`をハングさせるモード固有のバグがあることも判明した——詳細は同ドキュメント「続報12・13」。`tools/custom_sender` はこのサービスに直接接続し、公式GUIの制限を経由せずフル機能へアクセスすることを目指す独自クライアントである。
+さらに、GUI⇔サービス間の通信は固定メッセージではなく汎用的なプロパティツリー方式であり、公式GUIが一切参照していない設定項目がサービス側に存在する。実機から読み出した変調パラメータの完全なFieldID一覧は [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) にまとめてあり、8つのModeそれぞれに固有のサブ構造体が存在する。公式サービス経由では`DVB_T`/`ATSC`/`J83B`が成功し、`J83A`はサービス側の設定不能な検証値、`DTMB`/`J83C`はサービスのハング、`DVB_T2`は規格パラメータ検証で止まる。一方、サービスを迂回する`direct_usb`ではDVB_T2以外の7モードを送出できる。`tools/custom_sender`は公式サービス経由のフル機能と、この直接USB経路の双方を提供する独自クライアントである。
 
 送出（Set）経路は当初`CmdProgramApply`が謎の`bad status`エラーで止まっていたが、Ghidra・cdbによるネイティブ動的解析の末に真因（エンコーダオブジェクトの未初期化）を特定し、さらに`CmdChannelStart`はSourceが一切存在しない段階で一度だけ呼ぶ「変調器・エンコーダの電源投入」操作であり、`CmdProgramApply`／`CmdSourceStart`はその後で「稼働中のパイプラインに実ソースを繋ぐ」別の後段ステップである、という公式アプリの実際のアーキテクチャを特定した。この順序と必須プロパティ群を揃えたところ送出パイプライン全体が動作した（詳細は [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md) の「続報3・4」）。
 
@@ -109,7 +122,7 @@ GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情�
 - **変調・RF電力設定タブ**: 周波数・Constellation・Bandwidth・FFT・CodeRate・
   GuardInterval・TimeInterleavce・RF電力(Level/PAGain/DACGain)を自由に設定でき、
   `ChannelStart`単体で変調器を実際にRF駆動できる。「直接USB」バックエンド選択時のみ、
-  「Mode」コンボ（DVB_T/ATSC/J83B/ISDB_T、実機で安全と確認済みの4値）でモード切替も可能
+  「Mode」コンボ（DVB_T/ATSC/J83B/DTMB/ISDB_T/J83C、直接USBで確認済みの6値）でモード切替も可能
   （[続報19・20](docs/protocol/modulation_capabilities.md)）——選択したModeに応じて
   Constellationの選択肢や有効なフィールドが自動的に切り替わる。
 - **チャンネル・番組情報タブ**（mnservice.exe経由のみ）: サービス名・ネットワーク名・TS名・

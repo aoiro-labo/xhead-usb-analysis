@@ -150,7 +150,9 @@ XHEAD-2にはBML設定用の内蔵Webサーバー（`XHEAD-2_BML_WEB.pdf`参照�
       マップ化（[tools/usb_capture](../tools/usb_capture)、[tools/native_analysis](../tools/native_analysis)）。
 - [x] USB通信をUSBPcapで実キャプチャ → WinUSB経由で完了。バルク転送(24064バイト=MPEG-TS
       188バイト×128、224スライスのリングバッファ)の生TSフレーミング、コントロール転送の
-      フローコントロール通知パターンを確認（[tools/usb_capture](../tools/usb_capture)）。
+      周期的なレジスタ読み出しパターンを確認。当初はフロー制御通知と解釈していたが、
+      後の全呼び出し元解析で`0x4A`（アドレス設定）→`0x4E`（8バイト読み出し）という
+      汎用レジスタバスだと訂正済み（[tools/usb_capture](../tools/usb_capture)）。
 - [x] gRPC reflection の有効性確認 → reflectionではなく `Ms*Reflection.cs` 埋め込みの
       `FileDescriptorProto` から確定情報を取得済み（`docs/protocol/`）
 - [x] Debugモード解放の実機確認 → ドライバ修正後、GUIに「BML」タブと「デバッグ機能を

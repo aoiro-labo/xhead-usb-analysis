@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -64,6 +65,8 @@ namespace XHeadDirectUsb
             uint interleave = 3;      // DTMB only: 2=TI_240 3=TI_720(既定)
             int dacgain = -10;
             int streamSeconds = 3;
+            string tsFile = null;
+            long streamBitrate = 20000000;
             bool forceUntestedMode = false;
 
             for (int i = 0; i < args.Length; i++)
@@ -75,6 +78,8 @@ namespace XHeadDirectUsb
                 else if (args[i] == "--stream") streamMode = true;
                 else if (args[i] == "--stop") stopMode = true;
                 else if (args[i] == "--seconds") streamSeconds = Convert.ToInt32(args[++i]);
+                else if (args[i] == "--ts-file") tsFile = args[++i];
+                else if (args[i] == "--bitrate") streamBitrate = Convert.ToInt64(args[++i]);
                 else if (args[i] == "--freq") freqKHz = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--mode") mode = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--force-untested-mode") forceUntestedMode = true;
@@ -152,8 +157,14 @@ namespace XHeadDirectUsb
             {
                 if (streamMode)
                 {
+                    if (streamSeconds <= 0 || streamBitrate <= 0)
+                    {
+                        Console.WriteLine("--seconds and --bitrate must both be greater than zero.");
+                        return 1;
+                    }
+                    if (tsFile != null) ValidateTsFile(tsFile);
                     RunConfigureSequence(mode, freqKHz, constellation, bandwidth, fft, coderate, guardinterval, timeinterleave, carrier, frame, interleave, dacgain);
-                    RunStreamTest(streamSeconds);
+                    RunStreamTest(streamSeconds, streamBitrate, tsFile);
                 }
                 else if (configureMode)
                 {
@@ -403,67 +414,106 @@ namespace XHeadDirectUsb
         }
 
         /// <summary>
-        /// Sends a burst of synthetic null-TS-packet slices over the bulk OUT endpoint, WITHOUT
-        /// replicating the periodic 0x4A/0x4E flow-control notify/readback pair that mnservice.exe
-        /// interleaves with real streaming (tools/usb_capture/README.md "続報"/"続報2" -- that
-        /// notify's exact address-encoding semantics aren't fully understood yet). This is a
-        /// deliberately narrow experiment: does bulk-OUT payload alone (on top of the register
-        /// configuration already sent by RunConfigureSequence) change anything observable, or does
-        /// the device require the notify handshake before it treats bulk data as real? Either
-        /// answer is informative; see tools/direct_usb/README.md for the result once run.
-        /// Packets use the standard MPEG-TS "null packet" convention (PID=0x1FFF) so any real ISDB-T
-        /// demux downstream would recognize them as stuffing rather than malformed data.
-        /// </summary>
-        /// <summary>
-        /// 2026-07-27: interleaves 0x0629 polling (control transfers) with the bulk-OUT TS slice
+        /// Streams either synthetic null packets or a real 188-byte-packet TS file. The producer is
+        /// paced to the requested bitrate; the first experiment wrote as fast as WinUSB accepted
+        /// data, which could overrun a device-side ring and was not representative of a real mux.
+        /// Interleaves read-only 0x0629 polling (control transfers) with the bulk-OUT TS slice
         /// writes. 0x0629 was already characterized in three static states (tools/usb_capture/
         /// README.md 続報9): idle=439(0x1B7), configured-but-no-TS=0, streaming=observed varying
         /// 7-472. This logs a time series during an actual --stream run from this tool, to see
         /// whether the value's behavior over time looks like a ring-buffer occupancy gauge
         /// (bounded, fluctuating around some steady-state) versus something else (monotonic growth
-        /// suggesting overflow, a fixed constant unrelated to the data volume, etc.).
+        /// suggesting overflow, a fixed constant unrelated to the data volume, etc.). The earlier
+        /// zero write before each poll was removed: 0x4A/0x4E is the generic register-read sequence,
+        /// not a separate flow-control notification, and observation should not change the status.
         /// </summary>
-        private static void RunStreamTest(int seconds)
+        private static void RunStreamTest(int seconds, long bitrate, string tsFile)
         {
-            Console.WriteLine($"  Streaming synthetic null-TS slices over bulk OUT (pipe 0x{PIPE_ID_BULK_OUT:X2}) for {seconds}s, polling 0x0629 concurrently...");
+            string source = tsFile == null ? "synthetic null TS" : Path.GetFullPath(tsFile);
+            Console.WriteLine($"  Streaming {source} over bulk OUT (pipe 0x{PIPE_ID_BULK_OUT:X2}) for {seconds}s at {bitrate:N0} bit/s, polling 0x0629 concurrently...");
             Console.Out.Flush();
 
-            byte[] slice = BuildNullTsSlice();
+            byte[] slice = tsFile == null ? BuildNullTsSlice() : new byte[SLICE_SIZE_BYTES];
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var pollSw = System.Diagnostics.Stopwatch.StartNew();
             long slicesSent = 0;
             long bytesSent = 0;
 
-            while (sw.Elapsed.TotalSeconds < seconds)
+            using (FileStream input = tsFile == null ? null : File.OpenRead(tsFile))
             {
-                uint transferred;
-                bool ok = WinUsb_WritePipe(_winusbHandle, PIPE_ID_BULK_OUT, slice, (uint)slice.Length, out transferred, IntPtr.Zero);
-                if (!ok)
+                while (sw.Elapsed.TotalSeconds < seconds)
                 {
-                    int err = Marshal.GetLastWin32Error();
-                    Console.WriteLine($"  WinUsb_WritePipe failed after {slicesSent} slices, Win32 error 0x{err:X} ({err}). Stopping stream test.");
-                    return;
-                }
-                slicesSent++;
-                bytesSent += transferred;
+                    if (input != null) FillSliceFromTs(input, slice);
 
-                if (pollSw.Elapsed.TotalMilliseconds >= 200)
-                {
-                    // mnservice.exe's own observed pattern (tools/usb_capture/README.md 続報9) pairs
-                    // a 0x0629=0 WRITE with each read, ~19ms apart -- replicate that pairing here in
-                    // case the write itself is what triggers a fresh sample/latch.
-                    SetAddress(0x0629);
-                    WriteRegister(0);
-                    SetAddress(0x0629);
-                    var (echoAddr, data) = ReadRegister();
-                    Console.WriteLine($"  t={sw.Elapsed.TotalSeconds:F2}s slices={slicesSent} bytes={bytesSent} 0x0629={data} (0x{data:X})");
-                    Console.Out.Flush();
-                    pollSw.Restart();
+                    uint transferred;
+                    bool ok = WinUsb_WritePipe(_winusbHandle, PIPE_ID_BULK_OUT, slice, (uint)slice.Length, out transferred, IntPtr.Zero);
+                    if (!ok)
+                    {
+                        int err = Marshal.GetLastWin32Error();
+                        Console.WriteLine($"  WinUsb_WritePipe failed after {slicesSent} slices, Win32 error 0x{err:X} ({err}). Stopping stream test.");
+                        return;
+                    }
+                    if (transferred != slice.Length)
+                    {
+                        Console.WriteLine($"  Short bulk write after {slicesSent} slices: {transferred}/{slice.Length} bytes. Stopping stream test.");
+                        return;
+                    }
+                    slicesSent++;
+                    bytesSent += transferred;
+
+                    double targetSeconds = bytesSent * 8.0 / bitrate;
+                    while (sw.Elapsed.TotalSeconds + 0.001 < targetSeconds) Thread.Sleep(1);
+
+                    if (pollSw.Elapsed.TotalMilliseconds >= 200)
+                    {
+                        // 0x4A/0x4E is a generic register read. Observation must not mutate
+                        // this dynamic status register.
+                        SetAddress(0x0629);
+                        var (echoAddr, data) = ReadRegister();
+                        Console.WriteLine($"  t={sw.Elapsed.TotalSeconds:F2}s slices={slicesSent} bytes={bytesSent} 0x0629={data} (0x{data:X})");
+                        Console.Out.Flush();
+                        pollSw.Restart();
+                    }
                 }
             }
 
             Console.WriteLine($"  Stream test done: {slicesSent} slices / {bytesSent} bytes sent in {sw.Elapsed.TotalSeconds:F1}s, no pipe errors.");
             Console.Out.Flush();
+        }
+
+        private static void ValidateTsFile(string path)
+        {
+            if (!File.Exists(path)) throw new FileNotFoundException("TS input file not found.", path);
+            var info = new FileInfo(path);
+            if (info.Length == 0 || info.Length % TS_PACKET_SIZE != 0)
+                throw new InvalidDataException($"TS input size must be a non-zero multiple of {TS_PACKET_SIZE} bytes (actual: {info.Length}).");
+
+            using (var input = File.OpenRead(path))
+            {
+                int packetsToCheck = (int)Math.Min(32, info.Length / TS_PACKET_SIZE);
+                for (int packet = 0; packet < packetsToCheck; packet++)
+                {
+                    int sync = input.ReadByte();
+                    if (sync != 0x47)
+                        throw new InvalidDataException($"TS sync byte missing at packet {packet} (offset {packet * TS_PACKET_SIZE}, got 0x{sync:X2}).");
+                    input.Position += TS_PACKET_SIZE - 1;
+                }
+            }
+        }
+
+        private static void FillSliceFromTs(FileStream input, byte[] slice)
+        {
+            int offset = 0;
+            while (offset < slice.Length)
+            {
+                int read = input.Read(slice, offset, slice.Length - offset);
+                if (read == 0)
+                {
+                    input.Position = 0;
+                    continue;
+                }
+                offset += read;
+            }
         }
 
         private static byte[] BuildNullTsSlice()
