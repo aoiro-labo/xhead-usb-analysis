@@ -1693,10 +1693,9 @@ PAT/PMT/SDT、MPEG-2映像、AAC音声を確認した。transport error indicato
 ### 続報33 (2026-07-30): 直接USB GUIのチャンネル情報・EPGをTSへ自動反映
 
 直接USB時にも「チャンネル・番組情報」「EPG」タブを有効化し、TSDuck加工を選ぶとGUI値から
-送出TSをリアルタイムで書き換えるようにした。`svrename --japan`でサービス名・サービスID・
-provider名、`nit --create --network-name`でネットワーク名を反映する。EPGはタイトル・説明・
-EventID・配信間隔から一時EIT XMLを生成し、`eitinject --japan --actual`でp/fとscheduleを
-PID 0x0012へ注入する。一時XMLは送信停止時に削除する。
+送出TSをリアルタイムで書き換えるようにした。当初は`svrename`、`sdt`、`nit --create`だけ
+だったが、続報37の比較で複数サービスと元局NITが残る欠陥が判明した。この当初実装は
+続報38の選択的リマックスへ置き換え済み。
 
 RFを使わない事前検証TSを`analyze --japan`で再解析し、日本語サービス名、provider名、
 PID 0x0012のEIT p/f/scheduleを確認した。RegionID/BroadcasterID/RemoteControlKeyID/
@@ -1775,6 +1774,23 @@ PAT/CAT/NIT/SDT/EIT/TOT/BITも新規生成されている。
 比較詳細と再実装要件は`docs/protocol/service_vs_direct_ts.md`に分離した。
 ここで必要なのは映像・音声等の全面再エンコードではない。ES/PESは原則パススルーし、
 送信先依存のPSI/SI、各種ID、PCR/CBRだけを整合させる選択的リマックスを次の実装方針とする。
+
+### 続報38 (2026-07-30): 直接USBへ選択的リマックスを実装
+
+GUIのTSDuck経路を、入力TSの先頭サービスだけを残す`zap --stuffing --eit`を起点とする構成へ
+変更した。映像・音声・字幕・DSM-CCデータ放送・ECMのPIDとペイロードは維持し、PAT/SDTの
+TSID/ONID、Service ID、NIT、BIT、EITだけをローカル送出用に再構成する。
+
+公式出力を基準にTSID/ONID=`0x7E81`、Service ID=`0x5C08`を暫定使用する。NITにはGUIで
+指定した周波数、RegionID、RemoteControlKeyID、TS名、FFT、GuardIntervalを反映する。
+`zap`後は元NIT/BIT PIDがnull packetへ変わるため、`inject --replace`ではなく
+`--inter-packet`でPID `0x0010`/`0x0024`を新規生成する。
+
+録画TSを使う非RF試験では、4サービスから1サービスへ縮約され、SID/TSID/ONID、473 MHz、
+地域23、リモコンキー1、NIT/BITが整合することを確認した。元のMPEG-2映像、AAC音声、
+字幕、複数DSM-CC PIDもPMT配下に残った。これにより従来のチャンネル検出不能要因だった
+「元放送網とローカル設定の混在」は解消した。直接USB bulk経路の高TEI問題と、変調容量に
+合わせた厳密なCBR化は独立した未解決事項である。
 
 ## 重要な注意事項
 

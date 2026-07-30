@@ -43,6 +43,8 @@ namespace XHeadSender
         private UdpClient _udpClient;
         private Process _tsduckProcess;
         private string _temporaryEitFile;
+        private string _temporaryNitFile;
+        private string _temporaryBitFile;
         private volatile bool _streamStopRequested;
         private Exception _streamError;
 
@@ -260,15 +262,31 @@ namespace XHeadSender
                 string plugins = "";
                 if (metadata != null)
                 {
-                    plugins += $" -P svrename --japan --name {QuoteArgument(metadata.ServiceName)}" +
-                        $" --provider {QuoteArgument(metadata.NetworkName)} --id {Math.Max(1, metadata.ServiceNo)}";
-                    if (metadata.EPGMode != 0)
-                        plugins += $" -P sdt --japan --service-id {Math.Max(1, metadata.ServiceNo)} --eit-pf 1" +
-                            $" --eit-schedule {(metadata.EPGMode == 257 ? 1 : 0)}";
-                    plugins += $" -P nit --create --network-name {QuoteArgument(metadata.NetworkName)}";
+                    const int localTransportStreamId = 0x7E81;
+                    const int localServiceId = 0x5C08;
+                    int sourceServiceId = FindFirstServiceId(tspPath, fullPath);
+                    Console.WriteLine($"[DirectUSB] 選択リマックス: source service={sourceServiceId} -> " +
+                        $"service=0x{localServiceId:X4}, TSID/ONID=0x{localTransportStreamId:X4} " +
+                        "(映像・音声・字幕・データPIDは維持)");
+                    _temporaryNitFile = CreateNitFile(metadata, localTransportStreamId, localServiceId);
+                    _temporaryBitFile = CreateBitFile(metadata, localTransportStreamId);
+                    plugins += $" -P zap --stuffing --eit {sourceServiceId}" +
+                        $" -P svrename --japan --name {QuoteArgument(metadata.ServiceName)}" +
+                        $" --provider {QuoteArgument(metadata.NetworkName)} --id {localServiceId}" +
+                        $" -P pat --ts-id {localTransportStreamId}" +
+                        $" -P sdt --japan --ts-id {localTransportStreamId}" +
+                        $" --original-network-id {localTransportStreamId} --service-id {localServiceId}" +
+                        $" --name {QuoteArgument(metadata.ServiceName)} --provider {QuoteArgument(metadata.NetworkName)}" +
+                        $" --eit-pf {(metadata.EPGMode != 0 ? 1 : 0)}" +
+                        $" --eit-schedule {(metadata.EPGMode == 257 ? 1 : 0)}" +
+                        // zap replaces the removed services and global tables with null packets.
+                        // NIT/BIT therefore need to steal null packets; --replace would have no
+                        // target PID left and silently produce no table.
+                        $" -P inject {QuoteArgument(_temporaryNitFile + "=1000")} --pid 16 --inter-packet 1000" +
+                        $" -P inject {QuoteArgument(_temporaryBitFile + "=1000")} --pid 36 --inter-packet 1000";
                     if (metadata.EPGMode != 0)
                     {
-                        _temporaryEitFile = CreateEitFile(metadata);
+                        _temporaryEitFile = CreateEitFile(metadata, localTransportStreamId, localServiceId);
                         plugins += $" -P eitinject --japan --actual --wait-first-batch --time system" +
                             $" --files {QuoteArgument(_temporaryEitFile)} --cycle-pf-actual 1" +
                             " --cycle-schedule-actual-prime 1 --cycle-schedule-actual-later 1";
@@ -312,11 +330,9 @@ namespace XHeadSender
                     tsduck.Dispose();
                 }
             }
-            if (_temporaryEitFile != null)
-            {
-                try { File.Delete(_temporaryEitFile); } catch { }
-                _temporaryEitFile = null;
-            }
+            DeleteTemporaryFile(ref _temporaryEitFile);
+            DeleteTemporaryFile(ref _temporaryNitFile);
+            DeleteTemporaryFile(ref _temporaryBitFile);
             // Release a worker waiting in Receive(). The resulting SocketException/ObjectDisposedException
             // is an expected part of shutdown and is suppressed by StreamUdpWorker.
             UdpClient udp = _udpClient;
@@ -353,12 +369,46 @@ namespace XHeadSender
             return null;
         }
 
-        private static string CreateEitFile(ModulationConfig cfg)
+        private static int FindFirstServiceId(string tspPath, string sourcePath)
+        {
+            string analyzePath = Path.Combine(Path.GetDirectoryName(tspPath), "tsanalyze.exe");
+            if (!File.Exists(analyzePath))
+                throw new FileNotFoundException("TSDuckのtsanalyze.exeが見つかりません。", analyzePath);
+            var info = new ProcessStartInfo
+            {
+                FileName = analyzePath,
+                Arguments = "--service-list " + QuoteArgument(sourcePath),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            using (Process process = Process.Start(info))
+            {
+                if (process == null) throw new InvalidOperationException("tsanalyze.exeを起動できませんでした。");
+                if (!process.WaitForExit(30000))
+                {
+                    process.Kill();
+                    throw new TimeoutException("入力TSのサービス解析が30秒以内に完了しませんでした。");
+                }
+                string output = process.StandardOutput.ReadToEnd();
+                string error = process.StandardError.ReadToEnd();
+                if (process.ExitCode != 0)
+                    throw new InvalidOperationException("入力TSのサービス解析に失敗しました: " + error.Trim());
+                string[] fields = output.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                int serviceId;
+                if (fields.Length == 0 || !int.TryParse(fields[0], out serviceId))
+                    throw new InvalidOperationException("入力TSにサービスが見つかりません。");
+                return serviceId;
+            }
+        }
+
+        private static string CreateEitFile(ModulationConfig cfg, int transportStreamId, int serviceId)
         {
             DateTime start = DateTime.Now.AddSeconds(5);
             TimeSpan duration = TimeSpan.FromHours(Math.Max(1, cfg.EPGIntervalHours));
             string xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<tsduck>\r\n" +
-                $"  <EIT type=\"pf\" actual=\"true\" service_id=\"{Math.Max(1, cfg.ServiceNo)}\" transport_stream_id=\"1\" original_network_id=\"1\">\r\n" +
+                $"  <EIT type=\"pf\" actual=\"true\" service_id=\"{serviceId}\" transport_stream_id=\"{transportStreamId}\" original_network_id=\"{transportStreamId}\">\r\n" +
                 $"    <event event_id=\"{cfg.EPGEventID}\" start_time=\"{start:yyyy-MM-dd HH:mm:ss}\" duration=\"{duration:hh\\:mm\\:ss}\" running_status=\"running\">\r\n" +
                 "      <short_event_descriptor language_code=\"jpn\">\r\n" +
                 $"        <event_name>{SecurityElement.Escape(cfg.EPGTitle ?? "")}</event_name>\r\n" +
@@ -367,6 +417,52 @@ namespace XHeadSender
             string path = Path.Combine(Path.GetTempPath(), "xhead-eit-" + Guid.NewGuid().ToString("N") + ".xml");
             File.WriteAllText(path, xml, new UTF8Encoding(false));
             return path;
+        }
+
+        private static string CreateNitFile(ModulationConfig cfg, int transportStreamId, int serviceId)
+        {
+            string guard = cfg.GuardInterval == 0 ? "1/32" : cfg.GuardInterval == 1 ? "1/16" :
+                cfg.GuardInterval == 2 ? "1/8" : "1/4";
+            string mode = cfg.FFT == 0 ? "2k" : cfg.FFT == 2 ? "4k" : "8k";
+            string network = SecurityElement.Escape(cfg.NetworkName ?? "");
+            string tsName = SecurityElement.Escape(cfg.TSName ?? cfg.NetworkName ?? "");
+            string xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<tsduck>\r\n" +
+                $"  <NIT version=\"1\" current=\"true\" network_id=\"{transportStreamId}\" actual=\"true\">\r\n" +
+                $"    <network_name_descriptor network_name=\"{network}\"/>\r\n" +
+                "    <system_management_descriptor broadcasting_flag=\"0\" broadcasting_identifier=\"0x03\" additional_broadcasting_identification=\"0x01\"/>\r\n" +
+                $"    <transport_stream transport_stream_id=\"{transportStreamId}\" original_network_id=\"{transportStreamId}\">\r\n" +
+                $"      <service_list_descriptor><service service_id=\"{serviceId}\" service_type=\"0x01\"/></service_list_descriptor>\r\n" +
+                $"      <ISDB_terrestrial_delivery_system_descriptor area_code=\"{cfg.RegionID}\" guard_interval=\"{guard}\" transmission_mode=\"{mode}\">\r\n" +
+                $"        <frequency value=\"{cfg.Frequency * 1000UL}\"/>\r\n" +
+                "      </ISDB_terrestrial_delivery_system_descriptor>\r\n" +
+                $"      <TS_information_descriptor remote_control_key_id=\"{cfg.RemoteControlKeyID}\" ts_name=\"{tsName}\">\r\n" +
+                $"        <transmission_type transmission_type_info=\"0x20\"><service id=\"{serviceId}\"/></transmission_type>\r\n" +
+                "      </TS_information_descriptor>\r\n    </transport_stream>\r\n  </NIT>\r\n</tsduck>\r\n";
+            return WriteTemporaryXml("xhead-nit-", xml);
+        }
+
+        private static string CreateBitFile(ModulationConfig cfg, int transportStreamId)
+        {
+            string xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<tsduck>\r\n" +
+                $"  <BIT version=\"1\" current=\"true\" original_network_id=\"{transportStreamId}\" broadcast_view_propriety=\"true\">\r\n" +
+                $"    <broadcaster broadcaster_id=\"{Math.Min(255, cfg.BroadcasterID)}\">\r\n" +
+                $"      <extended_broadcaster_descriptor broadcaster_type=\"0x01\" terrestrial_broadcaster_id=\"{transportStreamId}\"/>\r\n" +
+                "    </broadcaster>\r\n  </BIT>\r\n</tsduck>\r\n";
+            return WriteTemporaryXml("xhead-bit-", xml);
+        }
+
+        private static string WriteTemporaryXml(string prefix, string xml)
+        {
+            string path = Path.Combine(Path.GetTempPath(), prefix + Guid.NewGuid().ToString("N") + ".xml");
+            File.WriteAllText(path, xml, new UTF8Encoding(false));
+            return path;
+        }
+
+        private static void DeleteTemporaryFile(ref string path)
+        {
+            if (path == null) return;
+            try { File.Delete(path); } catch { }
+            path = null;
         }
 
         private static string QuoteArgument(string value)
