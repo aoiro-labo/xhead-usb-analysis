@@ -112,6 +112,27 @@ dotnet run -- --sourceurl [ファイルパス]  # CLI: 動画/TSファイルを�
                                             # hostpolicy.dllが無いというエラーで失敗するので使わないこと)
 ```
 
+直接USB CLIはTS入力を3通り選べる。内蔵ファイル送信はTSDuck不要、UDP入力は任意の
+TSDuckパイプラインと接続でき、`--tsduck-file`は本ツール自身がインストール済みの
+`TSDuck tsp`を子プロセスとして起動する便利モードである。
+
+```powershell
+# 内蔵送信（外部依存なし）
+XHeadSender.exe --directtest --mode 5 --ts-file input.ts --bitrate 20000000
+
+# 本ツールがTSDuckを任意利用（既定UDP port 1234）
+XHeadSender.exe --directtest --mode 5 --tsduck-file input.ts --bitrate 20000000
+
+# TSDuck側で任意の入力・加工を構成し、本ツールへplain UDP TSを渡す
+XHeadSender.exe --directtest --mode 5 --udp-port 1234
+tsp -I file --infinite input.ts -P regulate --bitrate 20000000 -O ip --packet-burst 7 127.0.0.1:1234
+```
+
+UDP入力は安全のためlocalhostのみで待ち受け、現時点では188-byte TSのplain UDP専用
+（RTP/RS204は非対応）。受信データは同期バイトを検証し、128 TS packet単位のUSBスライスへ
+組み直す。なおUSB bulk OUTを継続消費させるデバイス側リング制御は引き続き解析中であり、
+この入力層の完成と「映像を含む連続RF送出」の完成は区別する必要がある。
+
 GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情報／EPG／メディア・コーデック／
 詳細コーデック／変調・RF電力設定）+ 接続→送出開始→停止→切断のボタン操作を基本としている。冒頭の
 「接続方式」トグルで**mnservice.exe経由**（既定、全機能）と**直接USB**（`mnservice.exe`

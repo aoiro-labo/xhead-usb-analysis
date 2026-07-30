@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -38,6 +40,8 @@ namespace XHeadSender
         private SafeUsbFileHandle _fileHandle;
         private IntPtr _winusbHandle = IntPtr.Zero;
         private Thread _streamThread;
+        private UdpClient _udpClient;
+        private Process _tsduckProcess;
         private volatile bool _streamStopRequested;
         private Exception _streamError;
 
@@ -191,11 +195,88 @@ namespace XHeadSender
             Console.WriteLine($"[DirectUSB] TS送信開始: {fullPath}, {bitrate:N0} bit/s");
         }
 
+        /// <summary>
+        /// TSDuck等からlocalhostのplain UDPで受けた188-byte MPEG-TSをbulk OUTへ送る。
+        /// UDPデータグラムはTSパケットの整数個でなければならず、RTP/RS204には対応しない。
+        /// データグラム境界をまたいで128 TS packet (24064 bytes)のUSBスライスへ再構成する。
+        /// </summary>
+        public void StartUdpTsStream(int port)
+        {
+            if (!DeviceOpen || !ChannelStarted) throw new InvalidOperationException("先に直接USB送出を開始してください。");
+            if (StreamRunning) throw new InvalidOperationException("TSストリームは既に実行中です。");
+            if (port < IPEndPoint.MinPort || port > IPEndPoint.MaxPort)
+                throw new ArgumentOutOfRangeException(nameof(port));
+
+            _udpClient = new UdpClient(new IPEndPoint(IPAddress.Loopback, port));
+            _streamStopRequested = false;
+            _streamError = null;
+            _streamThread = new Thread(() => StreamUdpWorker(port))
+            {
+                IsBackground = true,
+                Name = "XHEAD Direct USB UDP TS"
+            };
+            _streamThread.Start();
+            Console.WriteLine($"[DirectUSB] UDP TS待受開始: 127.0.0.1:{port} (plain UDP, 188-byte TS)");
+        }
+
+        /// <summary>
+        /// オプションのTSDuck tspを子プロセスとして起動し、ファイルを解析・ペーシングして
+        /// localhost UDP入力へ渡す。TSDuck未導入時もStartTsStreamは単独で利用できる。
+        /// </summary>
+        public void StartTSDuckFileStream(string path, int port, long bitrate = 20000000)
+        {
+            if (!File.Exists(path)) throw new FileNotFoundException("TSファイルが見つかりません。", path);
+            if (bitrate <= 0) throw new ArgumentOutOfRangeException(nameof(bitrate));
+            string tspPath = FindTSDuck();
+            if (tspPath == null)
+                throw new FileNotFoundException("TSDuckのtsp.exeが見つかりません。TSDuckをインストールするか--ts-fileを使用してください。");
+
+            StartUdpTsStream(port);
+            try
+            {
+                string fullPath = Path.GetFullPath(path);
+                var start = new ProcessStartInfo
+                {
+                    FileName = tspPath,
+                    Arguments = $"-I file --infinite {QuoteArgument(fullPath)} -P regulate --bitrate {bitrate} -O ip --packet-burst 7 127.0.0.1:{port}",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                _tsduckProcess = Process.Start(start);
+                if (_tsduckProcess == null) throw new InvalidOperationException("tsp.exeを起動できませんでした。");
+                Console.WriteLine($"[DirectUSB] TSDuck起動: PID={_tsduckProcess.Id}, {fullPath}, {bitrate:N0} bit/s");
+            }
+            catch
+            {
+                StopTsStream();
+                throw;
+            }
+        }
+
         public void StopTsStream()
         {
             Thread thread = _streamThread;
             if (thread == null) return;
             _streamStopRequested = true;
+            Process tsduck = _tsduckProcess;
+            _tsduckProcess = null;
+            if (tsduck != null)
+            {
+                try
+                {
+                    if (!tsduck.HasExited) tsduck.Kill();
+                    tsduck.WaitForExit(2000);
+                }
+                finally
+                {
+                    tsduck.Dispose();
+                }
+            }
+            // Release a worker waiting in Receive(). The resulting SocketException/ObjectDisposedException
+            // is an expected part of shutdown and is suppressed by StreamUdpWorker.
+            UdpClient udp = _udpClient;
+            _udpClient = null;
+            if (udp != null) udp.Close();
             // A synchronous WinUsb_WritePipe can wait indefinitely when the device-side ring is
             // full. Abort only the bulk OUT pipe to release that wait; endpoint-0 control
             // transfers remain usable for the RF stop command below.
@@ -206,6 +287,30 @@ namespace XHeadSender
             WinUsb_ResetPipe(_winusbHandle, PIPE_ID_BULK_OUT);
             Console.WriteLine("[DirectUSB] TS送信停止。");
             if (_streamError != null) throw new InvalidOperationException("直接USB TS送信中にエラーが発生しました。", _streamError);
+        }
+
+        private static string FindTSDuck()
+        {
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string installed = Path.Combine(programFiles, "TSDuck", "bin", "tsp.exe");
+            if (File.Exists(installed)) return installed;
+            string path = Environment.GetEnvironmentVariable("PATH") ?? "";
+            foreach (string dir in path.Split(Path.PathSeparator))
+            {
+                if (string.IsNullOrWhiteSpace(dir)) continue;
+                try
+                {
+                    string candidate = Path.Combine(dir.Trim(), "tsp.exe");
+                    if (File.Exists(candidate)) return candidate;
+                }
+                catch (ArgumentException) { }
+            }
+            return null;
+        }
+
+        private static string QuoteArgument(string value)
+        {
+            return "\"" + value.Replace("\"", "\\\"") + "\"";
         }
 
         private void StreamTsWorker(string path, long bitrate)
@@ -242,6 +347,76 @@ namespace XHeadSender
             {
                 _streamError = ex;
                 Console.WriteLine("[DirectUSB] TS送信エラー: " + ex.Message);
+            }
+        }
+
+        private void StreamUdpWorker(int port)
+        {
+            long datagrams = 0;
+            long packets = 0;
+            long slices = 0;
+            try
+            {
+                byte[] slice = new byte[SLICE_SIZE_BYTES];
+                int sliceOffset = 0;
+                var sender = new IPEndPoint(IPAddress.Any, 0);
+                while (!_streamStopRequested)
+                {
+                    UdpClient udp = _udpClient;
+                    if (udp == null) return;
+                    byte[] datagram = udp.Receive(ref sender);
+                    if (datagram.Length == 0) continue;
+                    ValidateUdpDatagram(datagram, sender);
+                    datagrams++;
+                    packets += datagram.Length / TS_PACKET_SIZE;
+
+                    int sourceOffset = 0;
+                    while (sourceOffset < datagram.Length && !_streamStopRequested)
+                    {
+                        int copy = Math.Min(slice.Length - sliceOffset, datagram.Length - sourceOffset);
+                        Buffer.BlockCopy(datagram, sourceOffset, slice, sliceOffset, copy);
+                        sourceOffset += copy;
+                        sliceOffset += copy;
+                        if (sliceOffset != slice.Length) continue;
+
+                        uint transferred;
+                        if (!WinUsb_WritePipe(_winusbHandle, PIPE_ID_BULK_OUT, slice,
+                            (uint)slice.Length, out transferred, IntPtr.Zero))
+                        {
+                            if (_streamStopRequested) return;
+                            int error = Marshal.GetLastWin32Error();
+                            throw new InvalidOperationException($"WinUsb_WritePipe failed: 0x{error:X} ({error})");
+                        }
+                        if (transferred != slice.Length)
+                            throw new IOException($"Short bulk write: {transferred}/{slice.Length} bytes");
+                        slices++;
+                        sliceOffset = 0;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (!_streamStopRequested)
+                {
+                    _streamError = ex;
+                    Console.WriteLine("[DirectUSB] UDP TS送信エラー: " + ex.Message);
+                }
+            }
+            finally
+            {
+                Console.WriteLine($"[DirectUSB] UDP統計: datagrams={datagrams:N0}, packets={packets:N0}, USB slices={slices:N0}");
+            }
+        }
+
+        private static void ValidateUdpDatagram(byte[] datagram, IPEndPoint sender)
+        {
+            if (datagram.Length % TS_PACKET_SIZE != 0)
+                throw new InvalidDataException(
+                    $"UDP datagram from {sender} is {datagram.Length} bytes; plain TS requires a multiple of {TS_PACKET_SIZE}. RTP/RS204 is not supported.");
+            for (int offset = 0; offset < datagram.Length; offset += TS_PACKET_SIZE)
+            {
+                if (datagram[offset] != 0x47)
+                    throw new InvalidDataException($"TS sync byte missing in UDP datagram from {sender}, offset={offset}.");
             }
         }
 

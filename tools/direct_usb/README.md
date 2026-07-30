@@ -21,7 +21,9 @@
 | GUI | `custom_sender`へ直接USBバックエンドとして統合済み |
 
 `custom_sender`側の直接USB GUIはDVB-T2を除く7 Modeに対応し、同バックエンドへ実TSバルク送信
-APIも移植済み。CLIからは`XHeadSender.exe --directtest --mode 5 --ts-file input.ts`で試せる。
+APIも移植済み。CLIでは内蔵送信の`--ts-file input.ts`に加え、TSDuck等から受ける
+`--udp-port 1234`と、TSDuckをオプションで子プロセス起動する`--tsduck-file input.ts`を選べる。
+UDPはlocalhostのplain 188-byte TSに限定し、同期検証後に128 packetのUSBスライスへ再構成する。
 
 > **読み方**: 「使い方」「プロトコル実装」「現在の未解決事項」が最新情報。
 > 「実証結果」以降は発見順の解析ログで、古い仮説には訂正注記を付けている。

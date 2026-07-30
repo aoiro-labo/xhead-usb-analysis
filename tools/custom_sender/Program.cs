@@ -126,7 +126,23 @@ namespace XHeadSender
                 string tsFile = null;
                 int tsIdx = Array.IndexOf(args, "--ts-file");
                 if (tsIdx >= 0 && tsIdx + 1 < args.Length) tsFile = args[tsIdx + 1];
-                return RunDirectUsbTest(testMode, tsFile);
+                string tsduckFile = null;
+                int tsduckIdx = Array.IndexOf(args, "--tsduck-file");
+                if (tsduckIdx >= 0 && tsduckIdx + 1 < args.Length) tsduckFile = args[tsduckIdx + 1];
+                int? udpPort = null;
+                int udpIdx = Array.IndexOf(args, "--udp-port");
+                if (udpIdx >= 0 && udpIdx + 1 < args.Length) udpPort = Convert.ToInt32(args[udpIdx + 1]);
+                long bitrate = 20000000;
+                int bitrateIdx = Array.IndexOf(args, "--bitrate");
+                if (bitrateIdx >= 0 && bitrateIdx + 1 < args.Length) bitrate = Convert.ToInt64(args[bitrateIdx + 1]);
+                int sourceCount = (tsFile != null ? 1 : 0) + (tsduckFile != null ? 1 : 0) +
+                    (udpPort.HasValue && tsduckFile == null ? 1 : 0);
+                if (sourceCount > 1)
+                {
+                    Console.Error.WriteLine("--ts-file、--udp-port、--tsduck-fileは送信元を1つだけ指定してください。");
+                    return 2;
+                }
+                return RunDirectUsbTest(testMode, tsFile, udpPort, tsduckFile, bitrate);
             }
 
             if (args.Contains("--verbose-grpc"))
@@ -397,7 +413,8 @@ namespace XHeadSender
         /// こと(WinUSBインターフェースを排他保持するため)。既定値(473000kHz/QPSK/6MHz/...)で
         /// Open->StartChannel->8秒保持->StopChannel->Closeを一通り実行する。
         /// </summary>
-        private static int RunDirectUsbTest(uint mode = 5, string tsFile = null)
+        private static int RunDirectUsbTest(uint mode = 5, string tsFile = null, int? udpPort = null,
+            string tsduckFile = null, long bitrate = 20000000)
         {
             Console.WriteLine("=== Direct USB backend test (bypasses mnservice.exe entirely) === Mode=" + mode);
             var session = new DirectUsbSession();
@@ -414,7 +431,9 @@ namespace XHeadSender
             {
                 session.Open();
                 session.StartChannel(cfg);
-                if (tsFile != null) session.StartTsStream(tsFile);
+                if (tsFile != null) session.StartTsStream(tsFile, bitrate);
+                else if (tsduckFile != null) session.StartTSDuckFileStream(tsduckFile, udpPort ?? 1234, bitrate);
+                else if (udpPort.HasValue) session.StartUdpTsStream(udpPort.Value);
                 Console.WriteLine("  Holding 8s -- check RTL-SDR now...");
                 System.Threading.Thread.Sleep(8000);
                 session.StopChannel();
