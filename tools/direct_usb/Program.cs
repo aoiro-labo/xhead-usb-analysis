@@ -429,6 +429,16 @@ namespace XHeadDirectUsb
         private static void RunStreamTest(int seconds, long bitrate, string tsFile)
         {
             string source = tsFile == null ? "synthetic null TS" : Path.GetFullPath(tsFile);
+            // Native captures show that ChannelStart leaves 0x0600 at 1 (ready), while
+            // SourceStart changes it to 2 for streaming. This transition is necessary for
+            // native parity, although live testing shows that another, still-unknown
+            // consumer-start condition is also required before bulk writes can complete.
+            Console.WriteLine("  Entering stream-active state: 0x0600 <= 0x00000002 (native SourceStart transition)");
+            SetAddress(0x0600);
+            Thread.Sleep(20);
+            WriteRegister(2);
+            Thread.Sleep(20);
+
             Console.WriteLine($"  Streaming {source} over bulk OUT (pipe 0x{PIPE_ID_BULK_OUT:X2}) for {seconds}s at {bitrate:N0} bit/s, polling 0x0629 concurrently...");
             Console.Out.Flush();
 
