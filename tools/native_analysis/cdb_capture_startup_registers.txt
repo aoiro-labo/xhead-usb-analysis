@@ -1,0 +1,4 @@
+.logopen /t C:\Users\aoiro\cdb_startup_registers.log
+bu mnservice+0x88500 ".printf \"WRITE addr=%08x data=%08x\\n\", @r8d, @r9d; gc"
+bu mnservice+0x883b0 ".printf \"BLOCK addr=%08x buffer=%p words=%x swap=%x\\n\", @r8d, @r9, poi(@rsp+0x28), poi(@rsp+0x30); gc"
+g

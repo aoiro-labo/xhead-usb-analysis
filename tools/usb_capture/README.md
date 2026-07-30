@@ -374,7 +374,7 @@ TimeInterleavceはデフォルト値がともに`3`で他フィールドと重�
 
 **【追記】`0x0600`と`0x0629`はその後解明された——続報9でライフサイクル全体を確認し、
 `0x0600`は`0`(idle)→`0x1000`(ChannelStart中、Frequency書き込み直後)→`1`(ChannelStart、
-変調パラメータ後)→`2`(SourceStart/実配信中)→`0x2000`(ChannelStop/teardown)という状態遷移だと
+変調パラメータ後)→bulk送信→`2`(stopModulation)→`0x2000`(ChannelStop/teardown)というコマンド列だと
 判明。`0x0629`はリングバッファの占有量（キュー深度）ステータスの可能性が高いと判明した。
 さらに`docs/protocol/modulation_capabilities.md`「続報15」で、`0x0600=0x2000`を
 `mnservice.exe`を介さず単体送信すると実際にRF出力が停止することをRTL-SDRで確認済み——
@@ -533,7 +533,7 @@ Ghidraで試みた（`tools/native_analysis/ghidra_scripts/XHeadDecodeStreamNoti
 |---|---|
 | `0x1000` | `ChannelStart`中、Frequency書き込み直後 |
 | `1` | `ChannelStart`中、変調パラメータ本体の書き込み後 |
-| `2` | `SourceStart`〜実際のストリーミング中 |
+| `2` | `stopModulation`（送出停止命令） |
 | `0x2000` | `ChannelStop`（終了処理）時 |
 
 つまり `0(待機) → 0x1000(設定中) → 1(設定完了/準備) → 2(送出中) → 0x2000(停止処理)` という

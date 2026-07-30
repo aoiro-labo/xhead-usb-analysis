@@ -26,7 +26,7 @@ namespace XHeadSender
     /// </summary>
     internal sealed class DirectUsbSession
     {
-        private static readonly Guid DeviceInterfaceGuid = new Guid("2F110364-7C93-4684-B4DC-46D95D5B3A9D");
+        private static readonly Guid DeviceInterfaceGuid = new Guid("DEE824EF-729B-4A0E-9C14-B7117D33A817");
 
         private const byte REQ_SET_ADDRESS = 0x4A;
         private const byte REQ_READ = 0x4E;
@@ -164,7 +164,10 @@ namespace XHeadSender
                 SetAddress(addr);
                 Thread.Sleep(20);
                 WriteRegister(data);
-                Thread.Sleep(20);
+                if (addr == 0x0600 && (data == 0x1000 || data == 1))
+                    WaitCommandFinish(data == 0x1000 ? "RFSTART" : "START");
+                else
+                    Thread.Sleep(20);
             }
 
             ChannelStarted = true;
@@ -325,6 +328,7 @@ namespace XHeadSender
                     while (!_streamStopRequested)
                     {
                         FillSlice(input, slice);
+                        SwapUsbWordsInPlace(slice);
                         uint transferred;
                         if (!WinUsb_WritePipe(_winusbHandle, PIPE_ID_BULK_OUT, slice,
                             (uint)slice.Length, out transferred, IntPtr.Zero))
@@ -379,6 +383,7 @@ namespace XHeadSender
                         sliceOffset += copy;
                         if (sliceOffset != slice.Length) continue;
 
+                        SwapUsbWordsInPlace(slice);
                         uint transferred;
                         if (!WinUsb_WritePipe(_winusbHandle, PIPE_ID_BULK_OUT, slice,
                             (uint)slice.Length, out transferred, IntPtr.Zero))
@@ -453,9 +458,21 @@ namespace XHeadSender
             }
         }
 
+        private static void SwapUsbWordsInPlace(byte[] buffer)
+        {
+            for (int offset = 0; offset < buffer.Length; offset += 4)
+            {
+                byte b0 = buffer[offset];
+                byte b1 = buffer[offset + 1];
+                buffer[offset] = buffer[offset + 3];
+                buffer[offset + 1] = buffer[offset + 2];
+                buffer[offset + 2] = b1;
+                buffer[offset + 3] = b0;
+            }
+        }
+
         /// <summary>
-        /// mnservice.exe側のChannelStop時に観測された「0x0600=0x2000(teardown)」を送信する。
-        /// direct_usb経路でRF出力がノイズフロアまで戻ることをRTL-SDRで実証済み。
+        /// stopModulation(2)を完了させてからChannelStop(0x2000)を送る。
         /// </summary>
         public void StopChannel()
         {
@@ -463,12 +480,18 @@ namespace XHeadSender
             Exception streamStopError = null;
             try { StopTsStream(); }
             catch (Exception ex) { streamStopError = ex; }
+            Console.WriteLine("[DirectUSB] stopModulationを送信(0x0600=2)...");
+            SetAddress(0x0600);
+            Thread.Sleep(20);
+            WriteRegister(2);
+            WaitCommandFinish("stopModulation");
             Console.WriteLine("[DirectUSB] ChannelStopを送信(0x0600=0x2000)...");
             SetAddress(0x0600);
             Thread.Sleep(20);
             WriteRegister(0x2000);
+            WaitCommandFinish("ChannelStop");
             ChannelStarted = false;
-            Console.WriteLine("[DirectUSB] *** 停止コマンドを送信しました。 ***");
+            Console.WriteLine("[DirectUSB] *** 停止シーケンスが完了しました。 ***");
             if (streamStopError != null)
                 throw new InvalidOperationException("RF停止は完了しましたが、TS送信停止中にエラーが発生しました。", streamStopError);
         }
@@ -532,6 +555,40 @@ namespace XHeadSender
             SendControlTransfer(pkt, null);
         }
 
+        private uint ReadRegister()
+        {
+            byte[] buffer = new byte[8];
+            var pkt = new RawSetupPacket
+            {
+                RequestType = BM_DEVICE_TO_HOST_VENDOR_DEVICE,
+                Request = REQ_READ,
+                Length0 = 8,
+                Length1 = 0
+            };
+            SendControlTransfer(pkt, buffer);
+            return ((uint)buffer[4] << 24) | ((uint)buffer[5] << 16) |
+                   ((uint)buffer[6] << 8) | buffer[7];
+        }
+
+        private void WaitCommandFinish(string commandName)
+        {
+            for (int elapsedMs = 200; elapsedMs <= 5000; elapsedMs += 200)
+            {
+                Thread.Sleep(200);
+                SetAddress(0x0600);
+                uint status = ReadRegister();
+                if (status != 0) continue;
+                SetAddress(0x0023);
+                uint result = ReadRegister();
+                if (result != 0)
+                    throw new InvalidOperationException(
+                        $"{commandName} failed with device result 0x{result:X8}");
+                Console.WriteLine($"[DirectUSB] {commandName}完了 ({elapsedMs} ms)。");
+                return;
+            }
+            throw new TimeoutException($"{commandName}が5秒以内に完了しませんでした。");
+        }
+
         private void SendControlTransfer(RawSetupPacket pkt, byte[] buffer)
         {
             uint lengthTransferred;
@@ -553,16 +610,27 @@ namespace XHeadSender
             try
             {
                 var ifData = new SP_DEVICE_INTERFACE_DATA();
-                ifData.cbSize = Marshal.SizeOf(ifData);
-                if (!SetupDiEnumDeviceInterfaces(hDevInfo, IntPtr.Zero, ref interfaceGuid, 0, ref ifData)) return null;
+                for (uint memberIndex = 0; ; memberIndex++)
+                {
+                    ifData.cbSize = Marshal.SizeOf(ifData);
+                    if (!SetupDiEnumDeviceInterfaces(hDevInfo, IntPtr.Zero, ref interfaceGuid,
+                        memberIndex, ref ifData)) return null;
 
-                int requiredSize = 0;
-                SetupDiGetDeviceInterfaceDetail(hDevInfo, ref ifData, IntPtr.Zero, 0, ref requiredSize, IntPtr.Zero);
+                    int requiredSize = 0;
+                    SetupDiGetDeviceInterfaceDetail(hDevInfo, ref ifData, IntPtr.Zero, 0,
+                        ref requiredSize, IntPtr.Zero);
 
-                var detail = new SP_DEVICE_INTERFACE_DETAIL_DATA();
-                detail.cbSize = IntPtr.Size == 8 ? 8 : 6;
-                if (!SetupDiGetDeviceInterfaceDetail2(hDevInfo, ref ifData, ref detail, requiredSize, ref requiredSize, IntPtr.Zero)) return null;
-                return detail.DevicePath;
+                    var detail = new SP_DEVICE_INTERFACE_DETAIL_DATA();
+                    detail.cbSize = IntPtr.Size == 8 ? 8 : 6;
+                    if (!SetupDiGetDeviceInterfaceDetail2(hDevInfo, ref ifData, ref detail,
+                        requiredSize, ref requiredSize, IntPtr.Zero)) continue;
+
+                    // The vendor GUID is shared by unrelated WinUSB devices on this PC.
+                    // Never send XHEAD register commands unless VID/PID identifies XHEAD-USB.
+                    if (detail.DevicePath.IndexOf("vid_17a7&pid_0008",
+                        StringComparison.OrdinalIgnoreCase) >= 0)
+                        return detail.DevicePath;
+                }
             }
             finally
             {

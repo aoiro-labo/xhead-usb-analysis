@@ -591,7 +591,17 @@ namespace XHeadSender
 
         private void SetHelpTip(Control control, string text)
         {
-            const int columns = 38;
+            // ToolTips are quick hints, not embedded documentation. Long property descriptions
+            // used to cover much of the form and were especially hard to scan on smaller screens.
+            const int maxCharacters = 150;
+            const int columns = 32;
+            text = text.Trim();
+            if (text.Length > maxCharacters)
+            {
+                int sentenceEnd = text.LastIndexOfAny(new[] { '。', '\n' }, maxCharacters - 1);
+                int cut = sentenceEnd >= 60 ? sentenceEnd + 1 : maxCharacters;
+                text = text.Substring(0, cut).TrimEnd() + "\n（詳細はREADME参照）";
+            }
             var formatted = new StringBuilder(text.Length + text.Length / columns);
             int lineLength = 0;
             foreach (char c in text)

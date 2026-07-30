@@ -117,9 +117,9 @@ XHeadDirectUsb.exe --stop                        # 送出停止（0x0600=0x2000�
   静的な設定ではなく何らかの動的な状態（カウンタ・フラグ等）を反映している可能性が高い。
   2回連続の休止時読み取りでは同じ439が返っており、時間経過で増加するような単純な
   アップタイムカウンタではなさそう。
-- `0x0600`: `0`(待機)→`0x1000`(設定中)→`1`(設定完了)→`2`(SourceStart/送出中)→
-  `0x2000`(停止処理)というライフサイクル状態。`--stream`もネイティブ動作に合わせ、
-  bulk OUT直前に`2`を書く。
+- `0x0600`: コマンドレジスタ。`0x1000`=`RFSTART`、`1`=`START`、
+  `2`=`stopModulation`、`0x2000`=`ChannelStop`。各コマンド後はゼロクリアを待ち、
+  `0x0023`の結果を確認する。
 
 ## マイルストーン: `mnservice.exe`を一切経由しないRF送出に成功 (2026-07-26)
 
@@ -444,16 +444,11 @@ GhidraでDVB-T2検証テーブルを抽出した結果、既定のFFT/GI/Pilot/F
 スペクトルも広帯域OFDMプラトーではなく3本の強いピークが目立つ。GUIには統合せず、引き続き
 CLIの実験機能として扱う。
 
-### 続報7 (2026-07-30): `SourceStart`状態遷移だけではbulk OUTは開始しない
+### 続報7 (2026-07-30、後日訂正): `0x0600=2`の誤認がbulk OUT停止の原因
 
-ネイティブキャプチャで`SourceStart`時に書かれる`0x0600=2`が直送経路から欠けていたため、
-`--stream`の最初のbulk OUTより前に同じ書き込みを追加した。ISDB-T・473 MHz・
-DACGain=-30・20 Mbpsのnull TSで3秒試験したが、最初の`WinUsb_WritePipe`は従来どおり
-完了せず、12秒で試験プロセスを終了した。直後に`--stop`（`0x0600=0x2000`）を送り、
-PnP `Status=OK`を確認済み。
-
-したがって`0x0600=2`は必要なライフサイクル遷移ではあるものの、単独ではデバイス側の
-TSリング消費開始条件を満たさない。Ghidra静的解析では、`mnservice.exe`がUSB初期化時に
+当初はネイティブキャプチャの時系列から`0x0600=2`を`SourceStart`と解釈し、bulk直前に
+追加した。しかし後のGhidra解析で、これは`stopModulation`関数が送る停止命令だと確定した。
+つまり旧実装はbulk転送の直前に変調を停止していた。Ghidra静的解析では、`mnservice.exe`がUSB初期化時に
 各パイプへ`WinUsb_SetPipePolicy(..., PolicyType=3, ValueLength=4, ...)`を適用することも
 確認できた。呼び出し元は`FUN_14007cdb0(device, 100)`なので値は100 msと確定し、直制御側にも
 同じ設定を実装した。以後は無限待ちせず、転送済み0 slice・Win32 error 121として観測できる。
@@ -467,16 +462,10 @@ USB上の`10 00 40 47 11 B0 00 00`を各4 byteごとに戻すと、有効なPAT�
 
 またXHEADは`{2F110364-...}`と、公式サービスがOutput pathとして使う
 `{DEE824EF-...}`の2つのvendor interfaceを公開する。後者へ変更し、同GUIDを使う別デバイスを
-誤選択しないよう`VID_17A7&PID_0008`でも選別した。ただし、正しいinterface・word reverse・
-`0x0600=2`・100 ms timeoutをすべて揃えた低出力試験でも、最初のbulk OUTは0 sliceのまま
-error 121となった。いずれも単独の開始条件ではない。
+誤選択しないよう`VID_17A7&PID_0008`でも選別した。当時のerror 121はinterfaceやTS形式ではなく、
+直前に`stopModulation(2)`を送っていたことが原因で、現在は解消している。
 
-残る最有力差分は、現在の直制御が`ChannelStart`の変調/RF列だけを再現し、
-`ProgramApply`で行われるTSハードウェア初期化を再現していない点である。公式USBキャプチャの
-control transferは1242件に達する一方、直制御の設定列は約40件しかない。次の調査は
-`ProgramApply`〜`SourceStart`間の追加レジスタ列の復元に集中する。
-
-### 続報9 (2026-07-30): リング寸法式と`0x2100` program routing tableを特定
+### 続報9 (2026-07-30、後日訂正): リング寸法式と任意の`0x2100` routing table
 
 Ghidraでスライスアロケータ`FUN_14038ac60`の呼び出し元を遡り、変換開始関数
 `FUN_14039b6a0`を特定した。ソフトウェアリングは次の引数で確保される:
@@ -494,8 +483,17 @@ alignment   = 5
 `mazo::mplatform::mTransformOutput::Output`と特定した。`ProgramApply`時はそのvtable
 `+0x40`（`FUN_140088c20`）が、チャンネル、番組、各ストリームの情報から最大4096バイトの
 `mModulationPlayload`を構築する。構築成功時だけ末尾に`0xff0082ff`を追加してvalidフラグを立て、
-変換開始処理がこの可変長ブロックをハードウェアアドレス`0x2100`へ32-bit word列として書く。
+一部のTransformOutput経路はこの可変長ブロックを`0x2100`へ書く。ただし後のcdbキャプチャで、
+通常のPSOutput直接送出はこの書き込みなしで開始することを確認した。したがってrouting tableは
+リング消費開始の必須条件ではなく、別の変換・ルーティング機能に属する。
 
-したがって開始条件は単なる追加レジスタ1個ではない。入力TSのProgram/PID/stream種別に対応した
-正しいrouting tableを先に適用する必要がある。固定ダンプの流用は避け、次はこのbuilderを
-自前実装するか、低位block-write関数で実データを採取してフォーマットを照合する。
+### 続報10 (2026-07-30): リング消費開始条件を解決、実受信まで完走
+
+`FUN_14038d9f0`の静的解析で`0x0600=2`が`stopModulation`だと確定し、
+`RFSTART(0x1000) → START(1) → bulk TS → stopModulation(2) → ChannelStop(0x2000)`
+へ修正した。各コマンドは`0x0600`がゼロになるまで200ms周期で待ち、`0x0023=0`を確認する。
+3〜10秒の連続送信を複数回行い、最長21,080,064 bytesをエラーなく転送した。
+
+DTV03A-1TU（Digibest ISDBT2071、px4_drv）でもフルセグをロックし、受信TSをTSDuckで解析した。
+PAT/PMT/SDT、MPEG-2映像PID 0x0100、AAC音声PID 0x0101を確認しており、
+`mnservice.exe`非依存の「TS → USB → RF → 実受信機 → TS」が成立した。

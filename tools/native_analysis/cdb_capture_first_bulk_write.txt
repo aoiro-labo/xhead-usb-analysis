@@ -1,0 +1,3 @@
+.logopen /t C:\Users\aoiro\cdb_first_bulk_write.log
+bu mnservice+0x7e070 ".printf \"FIRST_BULK pipe=%02x length=%x buffer=%p\\n\", by(@rdx), @r9d, @r8; db @r8 L80; .detach; q"
+g

@@ -22,7 +22,9 @@ namespace XHeadDirectUsb
         // This device exposes two vendor interface paths. mnservice advertises and opens the
         // DEE824EF path as its modulation Output; the 2F110364 path accepts register control
         // transfers but its bulk OUT pipe does not consume TS data.
-        private static readonly Guid DeviceInterfaceGuid = new Guid("DEE824EF-729B-4A0E-9C14-B7117D33A817");
+        private static readonly Guid OutputInterfaceGuid = new Guid("DEE824EF-729B-4A0E-9C14-B7117D33A817");
+        private static readonly Guid DeviceInterfaceGuid = new Guid("2F110364-7C93-4684-B4DC-46D95D5B3A9D");
+        private static Guid _selectedInterfaceGuid = OutputInterfaceGuid;
 
         private const byte REQ_SET_ADDRESS = 0x4A;
         private const byte REQ_READ = 0x4E;
@@ -95,6 +97,16 @@ namespace XHeadDirectUsb
                 else if (args[i] == "--frame") frame = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--interleave") interleave = Convert.ToUInt32(args[++i]);
                 else if (args[i] == "--dacgain") dacgain = Convert.ToInt32(args[++i]);
+                else if (args[i] == "--interface")
+                {
+                    string value = args[++i];
+                    if (value.Equals("output", StringComparison.OrdinalIgnoreCase))
+                        _selectedInterfaceGuid = OutputInterfaceGuid;
+                    else if (value.Equals("device", StringComparison.OrdinalIgnoreCase))
+                        _selectedInterfaceGuid = DeviceInterfaceGuid;
+                    else
+                        throw new ArgumentException("--interface must be output or device");
+                }
             }
 
             if ((configureMode || streamMode) && !forceUntestedMode)
@@ -379,7 +391,10 @@ namespace XHeadDirectUsb
                 WriteRegister(data);
                 Console.WriteLine($"  0x{addr:X4} <= 0x{data:X8}   ({label})");
                 Console.Out.Flush();
-                Thread.Sleep(20);
+                if (addr == 0x0600 && (data == 0x1000 || data == 1))
+                    WaitCommandFinish(data == 0x1000 ? "RFSTART" : "START");
+                else
+                    Thread.Sleep(20);
             }
 
             Console.WriteLine("Configure sequence complete. Reading back key registers...");
@@ -405,13 +420,19 @@ namespace XHeadDirectUsb
         /// </summary>
         private static void RunStopSequence()
         {
-            Console.WriteLine("  0x0600 <= 0x00002000   (ChannelStop/teardown, confirmed via RTL-SDR to cut RF output)");
+            Console.WriteLine("  0x0600 <= 0x00000002   (stopModulation)");
             Console.Out.Flush();
             SetAddress(0x0600);
             Thread.Sleep(20);
-            WriteRegister(0x2000);
+            WriteRegister(2);
+            WaitCommandFinish("stopModulation");
+
+            Console.WriteLine("  0x0600 <= 0x00002000   (ChannelStop/teardown)");
+            SetAddress(0x0600);
             Thread.Sleep(20);
-            Console.WriteLine("  Stop command sent.");
+            WriteRegister(0x2000);
+            WaitCommandFinish("ChannelStop");
+            Console.WriteLine("  Stop sequence completed.");
         }
 
         /// <summary>
@@ -431,16 +452,6 @@ namespace XHeadDirectUsb
         private static void RunStreamTest(int seconds, long bitrate, string tsFile)
         {
             string source = tsFile == null ? "synthetic null TS" : Path.GetFullPath(tsFile);
-            // Native captures show that ChannelStart leaves 0x0600 at 1 (ready), while
-            // SourceStart changes it to 2 for streaming. This transition is necessary for
-            // native parity, although live testing shows that another, still-unknown
-            // consumer-start condition is also required before bulk writes can complete.
-            Console.WriteLine("  Entering stream-active state: 0x0600 <= 0x00000002 (native SourceStart transition)");
-            SetAddress(0x0600);
-            Thread.Sleep(20);
-            WriteRegister(2);
-            Thread.Sleep(20);
-
             Console.WriteLine($"  Streaming {source} over bulk OUT (pipe 0x{PIPE_ID_BULK_OUT:X2}) for {seconds}s at {bitrate:N0} bit/s, polling 0x0629 concurrently...");
             Console.Out.Flush();
 
@@ -494,6 +505,35 @@ namespace XHeadDirectUsb
 
             Console.WriteLine($"  Stream test done: {slicesSent} slices / {bytesSent} bytes sent in {sw.Elapsed.TotalSeconds:F1}s, no pipe errors.");
             Console.Out.Flush();
+        }
+
+        /// <summary>
+        /// Mirrors mnservice's mmodulation_device command handshake (FUN_14038cec0):
+        /// after writing a command to 0x0600, wait 200 ms between reads until the command
+        /// register clears to zero, then read the command result from 0x0023.
+        /// </summary>
+        private static void WaitCommandFinish(string commandName)
+        {
+            const int pollIntervalMs = 200;
+            const int timeoutMs = 5000;
+            for (int elapsedMs = pollIntervalMs; elapsedMs <= timeoutMs; elapsedMs += pollIntervalMs)
+            {
+                Thread.Sleep(pollIntervalMs);
+                SetAddress(0x0600);
+                var (_, status) = ReadRegister();
+                Console.WriteLine($"    {commandName}: 0x0600=0x{status:X8} at {elapsedMs} ms");
+                if (status != 0)
+                    continue;
+
+                SetAddress(0x0023);
+                var (_, result) = ReadRegister();
+                Console.WriteLine($"    {commandName}: completed, result 0x0023=0x{result:X8}");
+                if (result != 0)
+                    throw new InvalidOperationException(
+                        $"{commandName} failed with device result 0x{result:X8}");
+                return;
+            }
+            throw new TimeoutException($"{commandName} did not clear 0x0600 within {timeoutMs} ms");
         }
 
         private static void ValidateTsFile(string path)
@@ -641,10 +681,10 @@ namespace XHeadDirectUsb
 
         private static bool OpenDevice()
         {
-            string devicePath = FindDevicePath(DeviceInterfaceGuid);
+            string devicePath = FindDevicePath(_selectedInterfaceGuid);
             if (devicePath == null)
             {
-                Console.WriteLine("  Device path not found for interface GUID " + DeviceInterfaceGuid);
+                Console.WriteLine("  Device path not found for interface GUID " + _selectedInterfaceGuid);
                 return false;
             }
             Console.WriteLine("  Device path: " + devicePath);
@@ -674,7 +714,31 @@ namespace XHeadDirectUsb
 
             Console.WriteLine("  WinUSB handle opened successfully.");
             Console.WriteLine("  Bulk OUT timeout: 100 ms (matches mnservice mWinUSBDevice initialization).");
+            LogPipeLayout();
             return true;
+        }
+
+        private static void LogPipeLayout()
+        {
+            UsbInterfaceDescriptor descriptor;
+            if (!WinUsb_QueryInterfaceSettings(_winusbHandle, 0, out descriptor))
+            {
+                Console.WriteLine("  WinUsb_QueryInterfaceSettings failed: " + Marshal.GetLastWin32Error());
+                return;
+            }
+            Console.WriteLine($"  USB interface {descriptor.InterfaceNumber}, alt={descriptor.AlternateSetting}, pipes={descriptor.NumEndpoints}");
+            for (byte index = 0; index < descriptor.NumEndpoints; index++)
+            {
+                WinUsbPipeInformation pipe;
+                if (WinUsb_QueryPipe(_winusbHandle, 0, index, out pipe))
+                {
+                    Console.WriteLine($"    pipe[{index}] id=0x{pipe.PipeId:X2} type={pipe.PipeType} maxPacket={pipe.MaximumPacketSize} interval={pipe.Interval}");
+                }
+                else
+                {
+                    Console.WriteLine($"    pipe[{index}] query failed: {Marshal.GetLastWin32Error()}");
+                }
+            }
         }
 
         private static void CloseDevice()
@@ -810,6 +874,45 @@ namespace XHeadDirectUsb
         [DllImport("winusb.dll", SetLastError = true)]
         private static extern bool WinUsb_SetPipePolicy(IntPtr interfaceHandle, byte pipeId,
             uint policyType, uint valueLength, ref uint value);
+
+        [DllImport("winusb.dll", SetLastError = true)]
+        private static extern bool WinUsb_QueryInterfaceSettings(IntPtr interfaceHandle, byte alternateSettingNumber,
+            out UsbInterfaceDescriptor usbAltInterfaceDescriptor);
+
+        [DllImport("winusb.dll", SetLastError = true)]
+        private static extern bool WinUsb_QueryPipe(IntPtr interfaceHandle, byte alternateInterfaceNumber,
+            byte pipeIndex, out WinUsbPipeInformation pipeInformation);
+
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        private struct UsbInterfaceDescriptor
+        {
+            public byte Length;
+            public byte DescriptorType;
+            public byte InterfaceNumber;
+            public byte AlternateSetting;
+            public byte NumEndpoints;
+            public byte InterfaceClass;
+            public byte InterfaceSubClass;
+            public byte InterfaceProtocol;
+            public byte Interface;
+        }
+
+        private enum UsbdPipeType
+        {
+            Control,
+            Isochronous,
+            Bulk,
+            Interrupt
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WinUsbPipeInformation
+        {
+            public UsbdPipeType PipeType;
+            public byte PipeId;
+            public ushort MaximumPacketSize;
+            public byte Interval;
+        }
     }
 
     internal sealed class SafeFileHandle : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid

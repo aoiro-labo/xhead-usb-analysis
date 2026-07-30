@@ -13,7 +13,7 @@
 - `mnservice.exe`非依存の直接USB制御で全8 ModeのRF出力・停止を実機確認済み
 - DVB_T2は実験搬送波まで確認済み。規格準拠信号と16個の固有フィールドのレジスタ対応は未解決
 - 独自GUIは、公式サービス経由のフル機能と直接USB経由の変調・RF設定を切り替え可能
-- 次の主要課題は、実TSを適正ビットレートで直接USB送出し、変調器へ取り込まれるか確認すること
+- 実TSの直接USB送出とDTV03A-1TUでのフルセグ復調まで確認済み。次は受信品質の調整とTS機能拡張
 
 <details>
 <summary>項目別の詳細ステータスを開く</summary>
@@ -35,8 +35,8 @@
 | ISDB-T以外のMode切替（DVB_T等、STUDIOにない機能） | **全8 Modeで直接RF出力・停止を確認。DVB_T2は実験段階** | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報12・13・22・24・25」— DVB_T/J83A/ATSC/J83B/DTMB/ISDB_T/J83Cは`direct_usb`から送出可能。DVB_T2は`FECBlockNums`既定値0がビットレートを0にする不整合を修正すると、サービス内の別レイヤーがMode 7を明示拒否すると判明。一方、`direct_usb`の最小Mode 7列は2回連続でRF出力（最大+43.0/+35.8dB）と停止に成功し、実機も健全。ただしDVB-T2固有フィールドの生レジスタ対応と規格準拠は未確認。**アンテナ接続での非ISDB-T送出は行わないこと** |
 | チャンネル/番組メタデータ（サービス名・NetworkID等）の変更 | **完了** | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報14」— GUIタブ実装後、`mMTSChannelParam`/`mMTSProgramParam`を明示的に上書きすると`ChannelStart`が`mnservice.exe`をハングさせる問題を発見し一時撤去。原因調査でXHEAD-STUDIO自身も同じ設定値で同様にハングすることを確認、プロトコル/フィールドの問題ではなく**長時間の検証作業によるUSB接続の劣化**と判明——実機を物理的に抜き差ししたところ即座に解消し、STUDIO・本ツールとも正常に送出できるようになった。GUI機能を復活済み（`tools/custom_sender`「チャンネル/番組情報」タブ）。DTMB/J83Cのハング（続報13）は抜き差し後も再現し、こちらは本物のモード固有バグと確認 |
 | RTL-SDRループバックでの実信号検証 | 完了 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出前後で470〜476MHz帯（6MHz幅、ISDB-Tの帯域幅と一致）に約38dBのパワー上昇を実測、送出停止で消失することも確認。設定した中心周波数473MHzとも一致 |
-| `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 検証中 | [tools/usb_capture](tools/usb_capture) — USBスライスは24064バイト=MPEG-TS 188バイト×128。個数は固定224ではなく、ビットレートから`(bitrate / 192512 + 1) * 2`で決まる。USBペイロードはヘッダ付きではなく、連続TSを32-bitワードごとにbyte reverseした形式。コントロール転送は「アドレス設定→データ読み書き」の汎用レジスタバスと判明し、ISDB-T変調パラメータとDACGainをほぼマップ化済み。直接TS送出の残課題は`ProgramApply`が`0x2100`へ書く可変長program routing tableの再現 |
-| `mnservice.exe`を介さない直接制御（DLL/サービス完全非依存） | **全8 ModeでRF出力・停止を確認、GUI統合済み** | [tools/direct_usb](tools/direct_usb) — WinUSBで実機に直接接続し、解読したレジスタバスで読み書き・開始・停止を実証。DVB_T/J83A/ATSC/J83B/DTMB/ISDB_T/J83CはMode別の確認済み列で送出可能。DVB_T2も最小共通列と`0x0680=7`で2回連続して実験RF出力に成功したが、固有16フィールドのレジスタ対応と規格準拠は未確認。GUIの直接USBバックエンドは確認済み7 Modeを選択可能で、実験段階のDVB_T2のみCLI限定。直接バックエンド用の実TSバルク送信APIも追加済み。 |
+| `mnservice.exe`ネイティブ側の生USBプロトコル解析 | **直接送出に必要な経路を解明** | [tools/usb_capture](tools/usb_capture) — USBスライスは24064バイト=MPEG-TS 188バイト×128。ペイロードは連続TSを32-bitワードごとにbyte reverseした形式。`0x0600=2`は開始状態ではなく`stopModulation`命令であり、開始前に送っていたことがbulk停止の原因だった。`0x2100`のrouting tableは通常のPSOutput直接送出には必須でない |
+| `mnservice.exe`を介さない直接制御（DLL/サービス完全非依存） | **実TS送出・フルセグ復調まで完了、GUI統合済み** | [tools/direct_usb](tools/direct_usb) — 正しい`RFSTART(0x1000) → START(1) → bulk TS → stopModulation(2) → ChannelStop(0x2000)`を再現。DTV03A-1TUでPAT/PMT/SDT、MPEG-2映像、AAC音声を含むTSを受信・TSDuck解析済み。7 Modeは確認済み、DVB_T2は実験段階 |
 
 </details>
 
@@ -133,8 +133,7 @@ tsp -I file --infinite input.ts -P regulate --bitrate 20000000 -O ip --packet-bu
 
 UDP入力は安全のためlocalhostのみで待ち受け、現時点では188-byte TSのplain UDP専用
 （RTP/RS204は非対応）。受信データは同期バイトを検証し、128 TS packet単位のUSBスライスへ
-組み直す。なおUSB bulk OUTを継続消費させるデバイス側リング制御は引き続き解析中であり、
-この入力層の完成と「映像を含む連続RF送出」の完成は区別する必要がある。
+組み直す。USB bulk OUTの継続消費とDTV03A-1TUでのフルセグ復調まで確認済みである。
 
 GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情報／EPG／メディア・コーデック／
 詳細コーデック／変調・RF電力設定）+ 接続→送出開始→停止→切断のボタン操作を基本としている。冒頭の

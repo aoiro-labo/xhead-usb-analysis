@@ -22,7 +22,10 @@ public class XHeadDecodeRingStartChain extends GhidraScript {
             0x14038d650L, 0x14038d470L, 0x14038e2e0L, 0x14039ac80L,
             0x14039a990L, 0x140398e70L,
             0x140394a70L, 0x140394ff0L, 0x140395560L, 0x1403962a0L,
-            0x140394d70L, 0x140394c40L, 0x140088c20L
+            0x140394d70L, 0x140394c40L, 0x140088c20L,
+            0x14038cec0L, 0x140088050L, 0x140088630L, 0x140397b80L, 0x1403924d0L, 0x140392540L,
+            0x140395a30L, 0x140395af0L, 0x140391dd0L, 0x140393aa0L,
+            0x140391560L, 0x140395ba0L
         };
         for (long address : addresses) {
             Function function = getFunctionAt(toAddr(address));
