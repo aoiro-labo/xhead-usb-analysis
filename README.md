@@ -54,6 +54,7 @@
   - [tools/native_analysis](tools/native_analysis) — Ghidra/cdbによる`mnservice.exe`動的解析スクリプト・手順
   - [tools/usb_capture](tools/usb_capture) — USBプロトコル解析メモ
   - [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — RTL-SDRループバック検証メモ
+  - [tools/ts_pipeline](tools/ts_pipeline) — TSDuckによるTS解析、PID分離、番組単位EIT注入
 
 ## 主要な発見
 

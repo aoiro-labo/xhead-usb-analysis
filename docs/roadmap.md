@@ -68,3 +68,17 @@ TSDuckのEIT/PSI処理、PID remap、bitrate調整を前段で行い、完成TS�
 3. direct USB GUIへTS file / UDP / optional TSDuck入力を統合
 4. TSDuckテンプレート（字幕、EIT、PID再配置、CBR化）を提供
 5. 基板写真が得られた場合のみIC候補を型番レベルで照合
+
+## 2026-07-30 実装状況
+
+`tools/ts_pipeline/xhead-ts.ps1`を追加し、次を実装・非RF検証した。
+
+- TS全体を無加工で保持
+- 任意の1個または複数PIDを分離
+- TSDuck XML/JSONから番組単位EITを生成
+- null packetを持たないVBR素材にもstuffingを追加してEIT用帯域を確保
+- 出力PID 0x0012から日本語の番組名、説明、event ID、開始時刻を再抽出
+
+この結果、番組ごとのEITはTSファイル段階では実現可能と確認できた。字幕・データ放送は、
+既に正しく多重化されたTSなら無加工保持できる。別素材から新規に番組へ追加する場合はPMTの
+stream typeとARIB descriptorが必要なため、対象素材を解析してから個別に定義する。
