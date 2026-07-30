@@ -1655,6 +1655,22 @@ DeadlineExceededとなった。サービス停止後にdirect USBの停止コマ
 物理USB抜き差しを完全には代替できないことが分かった。RF停止済み、関連プロセス残留なし。
 物理抜き差し後に改めて`--scheduletest`を実行する必要がある。
 
+**最終再試験（成功）**: STUDIOでは正常認識・送出できるというユーザー確認を受け、自動起動方法を
+再検証した。`-WindowStyle Hidden`でのSTUDIO起動は初期化されなかったが、通常表示で15秒待つと
+STUDIOとサービスが正常起動した。STUDIOを強制終了した直後はcontrollerセッションが残るため、
+ハードウェア初期化後に`mnservice.exe`だけを再起動して制御権を解放した。
+
+この状態で2本の短いMP4を各2秒保持して`--scheduletest`を実行し、以下を全て確認した。
+
+- ChannelStart `ResultSuccess`
+- 素材1: SourceOpen → StatusReady → ProgramApply → SourceStart `ResultSuccess`
+- SourceStop/Close後、素材2でも同じ列が`ResultSuccess`
+- 最終SourceClose / ChannelStop / ChannelClose / Disconnectが全て`ResultSuccess`
+
+したがって、RFチャンネルを維持した素材の時刻切替に使うRPCライフサイクルは実機確認済みとなった。
+試験後はサービスを終了し、direct USB停止コマンドも重ねて送信。実機は
+`Present=True / Status=OK`、関連プロセス残留なし。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

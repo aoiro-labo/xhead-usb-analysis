@@ -179,7 +179,8 @@ GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情�
 GUIで使う前に`XHeadSender.exe --validate-schedule schedule.txt`で全素材の存在と形式を検査できる。
 実機の素材切替RPC列は
 `XHeadSender.exe --scheduletest file1 file2 --hold-seconds 8`で診断できる。ただし既存GUIとの
-同時接続は避け、GUIを終了してから実行すること。
+同時接続は避けること。サービス単体起動で変調出力が列挙されない場合は、STUDIOを通常表示で
+起動して初期化を待ち、STUDIO終了後にサービスを再起動してから診断する。
 
 CLIには他にモード切替（`--dvbt`/`--atsc`/`--j83b`等、[続報12・13](docs/protocol/modulation_capabilities.md)参照——`--dtmb`/`--j83c`は`mnservice.exe`をハングさせるため非推奨）、
 カラーバー自己完結生成（`--colorbar`、[続報8](docs/protocol/modulation_capabilities.md)参照、
