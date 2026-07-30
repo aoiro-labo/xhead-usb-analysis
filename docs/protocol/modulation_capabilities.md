@@ -1715,6 +1715,28 @@ SourceStart`の送出経路が実受信機でも成立している。
 gRPC切断が既に失敗していても必ずプロセス停止を実行する。GUIと同じセッション実装を使う
 `--guifiletest`で同じ録画TSを5秒送出し、停止・切断まで`exit=0`で再現確認した。
 
+### 続報35 (2026-07-30): 直接USBの大量D/E/Sを解析——CBR補充だけでは不足
+
+TVTestで直接USB出力を受信すると約38dBで映像・音声は出る一方、D/E/Sが高速増加した。
+元録画TS（2,555,047,652 bytes）をTSDuckで全解析した結果、13,590,679 packet中
+invalid sync=0、transport error=0、全PID continuity error=0で、素材破損ではなかった。
+
+録画TSはnull packetを除去した可変レートで、従来のTSDuck `add-input-stuffing 1/20`では
+目標レートへ届かずUSBリングをアンダーランさせる。UDP受信を1024 packetプリバッファし、
+128 packet単位を固定周期で送信、不足分をPID 0x1FFFの標準null packetで埋めるCBR化を実装した。
+TSDuck側は`regulate --pcr-synchronous`で素材のPCR速度を保持する。
+
+しかしDTV03A受信TSのTEIは、64QAM/3/4/GI 1/8・16.851 Mbpsで約42%、18.255 Mbpsでも約42%、
+QPSK/5/6/GI 1/16では約32%だった。4〜8 Mbpsの供給レートスイープでも約19〜28%で、
+理論レートに鋭い最小点はない。同期WritePipeへ速度を全面的に任せる高速送信は約93% TEIとなり
+悪化した。したがって残因は単純なファイル破損・null不足・固定レート誤差ではない。
+
+mnservice経由は同じQPSK条件・同じ受信系でTVTest D=0/E=0となるため、ProgramApply時に作られる
+PID→ISDB-T階層割当、TMCC、`0x2100` routing table等の追加初期化が直接USB側に欠けている可能性が
+高い。以前「通常PSOutputでは`0x2100`は必須でない」とした結論は、bulk開始の可否については
+正しいが、実用BER・階層伝送品質については不十分だったと訂正する。直接USBは現時点で
+「受信・映像表示可能」までであり、D/E/S=0相当の実用品質は未解決である。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に
