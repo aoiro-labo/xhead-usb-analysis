@@ -1020,9 +1020,9 @@ GUIタブ、`GuiSession.StartChannel()`）。
 
 GUIに「接続方式」トグル（mnservice.exe経由 / 直接USB）を追加し、「直接USB」を選ぶと:
 - `GuiSession`(gRPC)の代わりに`DirectUsbSession`(WinUSB直接)を使う
-- 対応範囲は変調パラメータ+RF電力設定のみ——「ソース」「チャンネル/番組情報」タブは
-  無効化される（`mMTSChannelParam`等はレジスタバスに現れないソフトウェア側の値であり、
-  `mnservice.exe`のエンコーダ/マルチプレクサが無いと意味を持たないため。続報8で確認済み）
+- 当時の対応範囲は変調パラメータ+RF電力設定のみだった。続報32で「ソース」タブの
+  TSファイル/TSDuck/時刻スケジュールを直接USBにも接続した。チャンネル/番組情報の生成は
+  引き続きサービス側機能だが、事前に完成TSへ多重化した情報は直接送出できる
 - `mnservice.exe`/`xhead_studio.exe`は事前に停止しておく必要がある（WinUSBインターフェースを
   排他保持するため、`DirectUsbSession.Open()`は素直に失敗する）
 
@@ -1678,6 +1678,17 @@ DTV03A-1TU（Digibest ISDBT2071、px4_drv）で物理チャンネル13をロッ�
 受信ファイルをTSDuckで解析した結果、139,263 TS packet、同期エラー0、
 PAT/PMT/SDT、MPEG-2映像、AAC音声を確認した。transport error indicatorは32,094 packetに
 残るためRFレベル・ビットレート・階層設定の調整余地はあるが、直接USBの送受信経路は成立した。
+
+### 続報32 (2026-07-30): GUI直接USBからTS/TSDuck/スケジュール送出
+
+直接USB選択時に「ソース」タブ全体を無効化し、`StartChannel`後にreturnしていたGUI制限を
+撤廃した。TSファイルを選ぶと`DirectUsbSession.StartTsStream`、任意のTSDuckチェックを
+有効にすると`StartTSDuckFileStream`へ接続する。ペーシング用TSビットレートもGUIで指定できる。
+時刻スケジュールはRFチャンネルを維持したまま`StopTsStream → StartTsStream`で素材を切り替える。
+
+デスクトップキャプチャとカラーバーは`mnservice.exe`内蔵エンコーダが必要なため直接USB時だけ
+無効化する。EPG・字幕・データ放送を含む完成TSは内容を変えずbulk送出できるので、TSDuck等で
+事前多重化する経路と組み合わせられる。
 
 ## 重要な注意事項
 

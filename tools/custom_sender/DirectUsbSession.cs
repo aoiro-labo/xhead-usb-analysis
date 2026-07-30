@@ -14,11 +14,9 @@ namespace XHeadSender
     /// GUIから使えるインスタンスメソッドとして移植したもの(ロジック自体は同一、実機で検証済み
     /// -- tools/direct_usb/README.md「マイルストーン」節、RTL-SDRで+33〜34dBのRF出力を実測済み)。
     ///
-    /// GuiSession(mnservice.exe経由)と対になる、もう一方の送出バックエンド。対応範囲は
-    /// レジスタで表現できる変調パラメータ + RF電力設定のみ -- Source添付(映像/音声)や
-    /// チャンネル/番組メタデータ(PSI/SI生成はmnservice.exeのソフトウェア側の仕事であり、
-    /// レジスタに対応物が無いことをtools/usb_capture/README.md「続報8」で確認済み)は
-    /// このバックエンドでは扱えない。
+    /// GuiSession(mnservice.exe経由)と対になる、もう一方の送出バックエンド。変調/RF設定と
+    /// 完成済みTSのbulk送出を扱う。エンコードやPSI/SI生成自体はmnservice.exe側の機能なので
+    /// 行わないが、映像・音声・字幕・EPG等を事前に多重化したTSはそのまま送出できる。
     ///
     /// mnservice.exe はWinUSBインターフェースを排他的に保持するため、このセッションを使う際は
     /// 事前に mnservice.exe / xhead_studio.exe を停止しておくこと(Open()は掴めなければ
@@ -159,15 +157,28 @@ namespace XHeadSender
             seq.Add((0x0629, 0));
             seq.Add((0x0629, 0));
 
-            foreach (var (addr, data) in seq)
+            try
             {
-                SetAddress(addr);
-                Thread.Sleep(20);
-                WriteRegister(data);
-                if (addr == 0x0600 && (data == 0x1000 || data == 1))
-                    WaitCommandFinish(data == 0x1000 ? "RFSTART" : "START");
-                else
+                foreach (var (addr, data) in seq)
+                {
+                    SetAddress(addr);
                     Thread.Sleep(20);
+                    WriteRegister(data);
+                    if (addr == 0x0600 && (data == 0x1000 || data == 1))
+                        WaitCommandFinish(data == 0x1000 ? "RFSTART" : "START");
+                    else
+                        Thread.Sleep(20);
+                }
+            }
+            catch
+            {
+                // RFSTARTだけ成功してSTARTが拒否された場合もRF/デバイス状態を残さない。
+                try { SendStopCommands(); }
+                catch (Exception cleanupError)
+                {
+                    Console.WriteLine("[DirectUSB] 開始失敗後の停止処理エラー: " + cleanupError.Message);
+                }
+                throw;
             }
 
             ChannelStarted = true;
@@ -480,6 +491,15 @@ namespace XHeadSender
             Exception streamStopError = null;
             try { StopTsStream(); }
             catch (Exception ex) { streamStopError = ex; }
+            SendStopCommands();
+            ChannelStarted = false;
+            Console.WriteLine("[DirectUSB] *** 停止シーケンスが完了しました。 ***");
+            if (streamStopError != null)
+                throw new InvalidOperationException("RF停止は完了しましたが、TS送信停止中にエラーが発生しました。", streamStopError);
+        }
+
+        private void SendStopCommands()
+        {
             Console.WriteLine("[DirectUSB] stopModulationを送信(0x0600=2)...");
             SetAddress(0x0600);
             Thread.Sleep(20);
@@ -490,10 +510,6 @@ namespace XHeadSender
             Thread.Sleep(20);
             WriteRegister(0x2000);
             WaitCommandFinish("ChannelStop");
-            ChannelStarted = false;
-            Console.WriteLine("[DirectUSB] *** 停止シーケンスが完了しました。 ***");
-            if (streamStopError != null)
-                throw new InvalidOperationException("RF停止は完了しましたが、TS送信停止中にエラーが発生しました。", streamStopError);
         }
 
         public void Close()

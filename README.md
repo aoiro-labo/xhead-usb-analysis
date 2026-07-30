@@ -12,7 +12,7 @@
 
 - `mnservice.exe`非依存の直接USB制御で全8 ModeのRF出力・停止を実機確認済み
 - DVB_T2は実験搬送波まで確認済み。規格準拠信号と16個の固有フィールドのレジスタ対応は未解決
-- 独自GUIは、公式サービス経由のフル機能と直接USB経由の変調・RF設定を切り替え可能
+- 独自GUIは、公式サービス経由のフル機能と直接USB経由の変調・RF・実TS送出を切り替え可能
 - 実TSの直接USB送出とDTV03A-1TUでのフルセグ復調まで確認済み。次は受信品質の調整とTS機能拡張
 
 <details>
@@ -109,7 +109,7 @@ dotnet build
 # XHEAD-STUDIO (xhead_studio.exe) を一度起動してサービスを立ち上げた状態で:
 dotnet run                              # CLI: 疎通確認・プロパティツリーダンプ・フルパイプラインテスト(デスクトップキャプチャ送出)
 dotnet run -- --sourceurl [ファイルパス]  # CLI: 動画/TSファイルを指定して送出
-./bin/Debug/net472/XHeadSender.exe --gui   # GUI: 接続方式(mnservice.exe経由/直接USB)・変調パラメータ+RF電力・
+./bin/Debug/net472/XHeadSender.exe --gui   # GUI: 接続方式(mnservice.exe経由/直接USB)・実TS・変調パラメータ+RF電力・
                                             # チャンネル情報・ソースを自由に設定して送出/停止
                                             # (net472はネイティブexeなので直接実行する。`dotnet <exe>`は
                                             # hostpolicy.dllが無いというエラーで失敗するので使わないこと)
@@ -139,7 +139,12 @@ GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情�
 詳細コーデック／変調・RF電力設定）+ 接続→送出開始→停止→切断のボタン操作を基本としている。冒頭の
 「接続方式」トグルで**mnservice.exe経由**（既定、全機能）と**直接USB**（`mnservice.exe`
 不要、[tools/direct_usb](tools/direct_usb)と同じWinUSB直接ロジックを`DirectUsbSession.cs`
-として統合したもの、変調パラメータ+RF電力設定のみ対応）を切り替えられる。
+として統合したもの、TSファイル/TSDuck/時刻スケジュール対応）を切り替えられる。
+
+直接USB GUIでは「ソース」でTSファイルまたはスケジュールを選ぶ。内蔵ループ送信のほか、
+「直接USB時にTSDuckを使用」を有効にすると`tsp`による整流を経由でき、TSビットレートも
+GUIから指定できる。キャプチャとカラーバーの生成はサービス内蔵エンコーダ依存のため
+直接USBでは使えないが、映像・音声・字幕・EPG等を事前に多重化した完成TSは送出できる。
 
 - **変調・RF電力設定タブ**: 周波数・Constellation・Bandwidth・FFT・CodeRate・
   GuardInterval・TimeInterleavce・RF電力(Level/PAGain/DACGain)を自由に設定でき、

@@ -51,6 +51,8 @@ namespace XHeadSender
         private RadioButton _rbSourceSchedule;
         private TextBox _txtUrlPath;
         private Button _btnBrowseUrl;
+        private CheckBox _chkDirectUseTSDuck;
+        private NumericUpDown _numDirectTsBitrate;
         private TextBox _txtSchedulePath;
         private Button _btnBrowseSchedule;
         private Label _lblStatus;
@@ -174,7 +176,7 @@ namespace XHeadSender
             var backendPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 28, Padding = new Padding(8, 2, 8, 2) };
             var backendLabel = new Label { Text = "接続方式:", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 4, 6, 0) };
             _rbBackendService = new RadioButton { Text = "mnservice.exe経由（既定、全機能）", AutoSize = true, Checked = true, Anchor = AnchorStyles.Left };
-            _rbBackendDirect = new RadioButton { Text = "直接USB（mnservice.exe不要、変調/RF電力のみ）", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(12, 0, 0, 0) };
+            _rbBackendDirect = new RadioButton { Text = "直接USB（mnservice.exe不要、TS送出対応）", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(12, 0, 0, 0) };
             SetHelpTip(_rbBackendService, "映像・音声、番組情報、EPGを含む全機能を利用できます。");
             SetHelpTip(_rbBackendDirect,
                 "mnservice.exeを使わず直接制御します。使用前にSTUDIOとmnservice.exeを終了してください。");
@@ -225,6 +227,24 @@ namespace XHeadSender
             urlRow.Controls.Add(_txtUrlPath);
             urlRow.Controls.Add(_btnBrowseUrl);
 
+            var directTsRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(20, 0, 0, 4) };
+            _chkDirectUseTSDuck = new CheckBox { Text = "直接USB時にTSDuckを使用", AutoSize = true, Checked = false, Anchor = AnchorStyles.Left };
+            _numDirectTsBitrate = new NumericUpDown
+            {
+                Minimum = 100000,
+                Maximum = 100000000,
+                Value = 16851216,
+                Increment = 1000,
+                ThousandsSeparator = true,
+                Width = 115,
+                Anchor = AnchorStyles.Left
+            };
+            directTsRow.Controls.Add(_chkDirectUseTSDuck);
+            directTsRow.Controls.Add(new Label { Text = "TSビットレート:", AutoSize = true, Padding = new Padding(10, 4, 0, 0) });
+            directTsRow.Controls.Add(_numDirectTsBitrate);
+            directTsRow.Controls.Add(new Label { Text = "bps", AutoSize = true, Padding = new Padding(0, 4, 0, 0) });
+            SetHelpTip(_chkDirectUseTSDuck, "OFFは内蔵ループ送信、ONはTSDuckで整流してlocalhost UDP経由で送信します。");
+
             var scheduleRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0, 2, 0, 4) };
             _rbSourceSchedule = new RadioButton { Text = "時刻スケジュール:", AutoSize = true, Anchor = AnchorStyles.Left };
             _txtSchedulePath = new TextBox { Width = 280, Anchor = AnchorStyles.Left, Margin = new Padding(4, 3, 4, 3) };
@@ -250,7 +270,8 @@ namespace XHeadSender
             sourceLayout.Controls.Add(_rbSourceCapture, 0, 1);
             sourceLayout.Controls.Add(_rbSourceColorbar, 0, 2);
             sourceLayout.Controls.Add(urlRow, 0, 3);
-            sourceLayout.Controls.Add(scheduleRow, 0, 4);
+            sourceLayout.Controls.Add(directTsRow, 0, 4);
+            sourceLayout.Controls.Add(scheduleRow, 0, 5);
 
             var metaLayout = NewParamTable();
             metaLayout.Padding = new Padding(10, 10, 6, 10);
@@ -786,12 +807,18 @@ namespace XHeadSender
         private void BackendChanged(object sender, EventArgs e)
         {
             bool direct = UseDirectBackend;
-            _sourceTab.Enabled = !direct;
+            _sourceTab.Enabled = true;
             _metaTab.Enabled = !direct;
             _epgTab.Enabled = !direct;
             _mediaTab.Enabled = !direct;
             _codecTab.Enabled = !direct;
             _cmbMode.Enabled = direct;
+            _rbSourceCapture.Enabled = !direct;
+            _rbSourceColorbar.Enabled = !direct;
+            _chkDirectUseTSDuck.Enabled = direct;
+            _numDirectTsBitrate.Enabled = direct;
+            if (direct && (_rbSourceCapture.Checked || _rbSourceColorbar.Checked))
+                _rbSourceNone.Checked = true;
             if (!direct)
             {
                 // GuiSession(mnservice.exe経由)はISDB_T固定 -- Mode切替は続報19時点で未対応。
@@ -799,9 +826,9 @@ namespace XHeadSender
             }
             if (direct)
             {
-                Console.WriteLine("[GUI] 直接USBモードを選択 -- Source添付・チャンネル/番組メタデータ・EPG・" +
-                    "メディア/コーデック設定は利用できません(いずれもmnservice.exe側のソフトウェア機能で、" +
-                    "レジスタバスに対応物が無いため)。mnservice.exe/xhead_studio.exeを事前に停止しておいてください。");
+                Console.WriteLine("[GUI] 直接USBモード -- TSファイル/TSDuck/時刻スケジュールを利用できます。" +
+                    "デスクトップキャプチャとカラーバー、メタデータ/EPG/コーデック生成はmnservice.exe内蔵" +
+                    "エンコーダ依存のため利用できません。mnservice.exe/xhead_studio.exeを停止してください。");
             }
         }
 
@@ -937,11 +964,13 @@ namespace XHeadSender
         private void SetSourceControlsEnabled(bool enabled)
         {
             _rbSourceNone.Enabled = enabled;
-            _rbSourceCapture.Enabled = enabled;
-            _rbSourceColorbar.Enabled = enabled;
+            _rbSourceCapture.Enabled = enabled && !UseDirectBackend;
+            _rbSourceColorbar.Enabled = enabled && !UseDirectBackend;
             _rbSourceUrl.Enabled = enabled;
             _txtUrlPath.Enabled = enabled;
             _btnBrowseUrl.Enabled = enabled;
+            _chkDirectUseTSDuck.Enabled = enabled && UseDirectBackend;
+            _numDirectTsBitrate.Enabled = enabled && UseDirectBackend;
             _rbSourceSchedule.Enabled = enabled;
             _txtSchedulePath.Enabled = enabled;
             _btnBrowseSchedule.Enabled = enabled;
@@ -987,31 +1016,61 @@ namespace XHeadSender
             _btnStart.Enabled = false;
             SetSourceControlsEnabled(false);
             var cfg = ReadConfigFromForm();
-
-            if (UseDirectBackend)
-            {
-                try
-                {
-                    await Task.Run(() => _directSession.StartChannel(cfg));
-                    SetStatus("送出中（直接USB、RFのみ）", Color.SeaGreen);
-                    _btnStop.Enabled = true;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("送出開始失敗: " + ex.Message);
-                    SetStatus("接続済み（送出失敗）", Color.Firebrick);
-                    _btnStart.Enabled = true;
-                    SetSourceControlsEnabled(true);
-                }
-                return;
-            }
-
             bool attachCapture = _rbSourceCapture.Checked;
             bool attachColorbar = _rbSourceColorbar.Checked;
             bool attachUrl = _rbSourceUrl.Checked;
             bool attachSchedule = _rbSourceSchedule.Checked;
             string urlPath = _txtUrlPath.Text;
             string schedulePath = _txtSchedulePath.Text;
+            bool directUseTSDuck = _chkDirectUseTSDuck.Checked;
+            long directTsBitrate = decimal.ToInt64(_numDirectTsBitrate.Value);
+
+            if (UseDirectBackend)
+            {
+                try
+                {
+                    SourceScheduleEntry initialScheduleEntry = null;
+                    if (attachCapture || attachColorbar)
+                        throw new InvalidOperationException("直接USBではデスクトップキャプチャ/カラーバーを生成できません。TSファイルを選択してください。");
+                    if (attachSchedule)
+                    {
+                        _scheduleEntries = SourceSchedule.Load(schedulePath);
+                        initialScheduleEntry = SourceSchedule.GetActive(_scheduleEntries, DateTime.Now);
+                        _scheduledSourcePath = initialScheduleEntry?.Path;
+                    }
+                    await Task.Run(() =>
+                    {
+                        _directSession.StartChannel(cfg);
+                        if (attachUrl) StartDirectFileStream(urlPath, directUseTSDuck, directTsBitrate);
+                        else if (attachSchedule && initialScheduleEntry != null)
+                            StartDirectFileStream(initialScheduleEntry.Path, directUseTSDuck, directTsBitrate);
+                    });
+                    string label = attachUrl ? "送出中（直接USB、TSファイル）" :
+                        attachSchedule ? (initialScheduleEntry == null ? "送出中（直接USB、スケジュール待機）" :
+                            "送出中（直接USBスケジュール: " + System.IO.Path.GetFileName(initialScheduleEntry.Path) + "）") :
+                        "送出中（直接USB、RFのみ）";
+                    SetStatus(label, Color.SeaGreen);
+                    _btnStop.Enabled = true;
+                    if (attachSchedule) _scheduleTimer.Start();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("送出開始失敗: " + ex.Message);
+                    if (_directSession.ChannelStarted)
+                    {
+                        SetStatus("送出中（直接USB、TS添付失敗・RFのみ）", Color.DarkOrange);
+                        _btnStop.Enabled = true;
+                    }
+                    else
+                    {
+                        SetStatus("接続済み（送出失敗）", Color.Firebrick);
+                        _btnStart.Enabled = true;
+                        SetSourceControlsEnabled(true);
+                    }
+                }
+                return;
+            }
+
             try
             {
                 SourceScheduleEntry initialScheduleEntry = null;
@@ -1130,16 +1189,30 @@ namespace XHeadSender
 
         private async void ScheduleTimer_Tick(object sender, EventArgs e)
         {
-            if (_scheduleSwitching || _scheduleEntries == null || !_session.ChannelStarted) return;
+            bool channelStarted = UseDirectBackend ? _directSession.ChannelStarted : _session.ChannelStarted;
+            if (_scheduleSwitching || _scheduleEntries == null || !channelStarted) return;
             SourceScheduleEntry active = SourceSchedule.GetActive(_scheduleEntries, DateTime.Now);
             if (active == null || string.Equals(active.Path, _scheduledSourcePath, StringComparison.OrdinalIgnoreCase)) return;
 
             _scheduleSwitching = true;
             _scheduleTimer.Stop();
+            bool directUseTSDuck = _chkDirectUseTSDuck.Checked;
+            long directTsBitrate = decimal.ToInt64(_numDirectTsBitrate.Value);
             try
             {
                 Console.WriteLine($"[GUI] スケジュール切替: {active.Path}");
-                await Task.Run(() => _session.SwitchUrlSource(active.Path));
+                await Task.Run(() =>
+                {
+                    if (UseDirectBackend)
+                    {
+                        _directSession.StopTsStream();
+                        StartDirectFileStream(active.Path, directUseTSDuck, directTsBitrate);
+                    }
+                    else
+                    {
+                        _session.SwitchUrlSource(active.Path);
+                    }
+                });
                 _scheduledSourcePath = active.Path;
                 SetStatus("送出中（スケジュール: " + System.IO.Path.GetFileName(active.Path) + "）", Color.SeaGreen);
             }
@@ -1151,8 +1224,17 @@ namespace XHeadSender
             finally
             {
                 _scheduleSwitching = false;
-                if (_scheduleEntries != null && _session.ChannelStarted) _scheduleTimer.Start();
+                channelStarted = UseDirectBackend ? _directSession.ChannelStarted : _session.ChannelStarted;
+                if (_scheduleEntries != null && channelStarted) _scheduleTimer.Start();
             }
+        }
+
+        private void StartDirectFileStream(string path, bool useTSDuck, long bitrate)
+        {
+            if (useTSDuck)
+                _directSession.StartTSDuckFileStream(path, 1234, bitrate);
+            else
+                _directSession.StartTsStream(path, bitrate);
         }
 
         private void StopSchedule()
