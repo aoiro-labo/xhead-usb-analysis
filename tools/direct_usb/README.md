@@ -485,9 +485,10 @@ alignment   = 5
 `mModulationPlayload`を構築する。構築成功時だけ末尾に`0xff0082ff`を追加してvalidフラグを立て、
 一部のTransformOutput経路はこの可変長ブロックを`0x2100`へ書く。ただし後のcdbキャプチャで、
 通常のPSOutput直接送出はこの書き込みなしで開始することを確認した。したがってrouting tableは
-リング消費「開始」だけには必須でない。ただし後のDTV03A/TVTest受信で大量TEIが残り、
-mnservice経由だけD/E=0だったため、PID→ISDB-T階層割当・TMCCを含む実用品質には
-このrouting処理が必要な可能性が高い。開始成功と正常な階層伝送は区別すること。
+リング消費「開始」だけには必須でない。さらに2026-07-30のUSBPcap再取得では、
+ChannelStart完了後から停止まで`0x2100`を含む追加レジスタ書き込みが一件もなく、
+ProgramApply前後のハードウェア差分説は否定された。DTV03A/TVTestで残る大量TEIの原因は
+bulk投入方式またはChannelStart以前の初期化差分として引き続き調査する。
 
 ### 続報10 (2026-07-30): リング消費開始条件を解決、実受信まで完走
 

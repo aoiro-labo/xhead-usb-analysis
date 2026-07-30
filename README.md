@@ -139,7 +139,9 @@ GUIには`mnservice.exe`の「サービス起動」「サービス停止」ボ�
 直接USBのISDB-T既定値は、mnservice経由でTVTestのD/E=0を確認した堅牢な
 QPSK・FFT 8k・符号化率5/6・GI 1/16・Time Interleave 3・約7.159 Mbit/sへ合わせている。
 ただし直接USBでは同じ物理値でもTEIが残る。録画TSから除去されたnull packetのCBR補充は
-実装済みだが、ProgramApplyが作るPID→階層routing/TMCC設定が未再現で、実用品質には未達である。
+実装済み。USBPcapで公式経路を再取得した結果、ProgramApply以後に追加レジスタ書き込みは
+存在せず、従来のPID→階層routing/TMCCレジスタ不足説は否定された。公式がbulk中に行う
+`0x0629` read→zero-write ACKと較正レジスタ読み出しも再現したがTEIは残り、実用品質には未達である。
 
 GUIのログ先頭には、実際に起動したexeの絶対パスとビルド更新日時を表示する。直接USBを選んだ
 のに旧「Source添付は利用できません」という文面が出る場合は古いDebug版を起動しているため、

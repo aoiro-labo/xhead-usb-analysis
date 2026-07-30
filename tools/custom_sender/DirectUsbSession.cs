@@ -165,13 +165,38 @@ namespace XHeadSender
             {
                 foreach (var (addr, data) in seq)
                 {
+                    // The official path reads command status before issuing RFSTART/START.
+                    // Some device registers are read-to-latch rather than passive telemetry.
+                    if (addr == 0x0600 && (data == 0x1000 || data == 1))
+                        ReadAddress(0x0600);
                     SetAddress(addr);
                     Thread.Sleep(20);
                     WriteRegister(data);
                     if (addr == 0x0600 && (data == 0x1000 || data == 1))
+                    {
                         WaitCommandFinish(data == 0x1000 ? "RFSTART" : "START");
+                        if (data == 1)
+                        {
+                            // Exact calibration-read burst observed between START completion and
+                            // the official RF-power writes.  Preserve it even though the current
+                            // DAC values are already known: these reads may latch device-side
+                            // calibration state.
+                            ReadAddress(0x0020);
+                            ReadAddress(0x1220);
+                            ReadAddress(0x1228);
+                            ReadAddress(0x1229);
+                            ReadAddress(0x1280);
+                            ReadAddress(0x1281);
+                            ReadAddress(0x1282);
+                            ReadAddress(0x1283);
+                        }
+                    }
                     else
+                    {
                         Thread.Sleep(20);
+                        if (addr == 0x0601)
+                            ReadAddress(0x0020);
+                    }
                 }
             }
             catch
@@ -382,6 +407,9 @@ namespace XHeadSender
             {
                 byte[] slice = new byte[SLICE_SIZE_BYTES];
                 long bytesSent = 0;
+                long ringHandshakes = 0;
+                uint ringMinimum = uint.MaxValue;
+                uint ringMaximum = 0;
                 var timer = Stopwatch.StartNew();
                 using (var input = File.OpenRead(path))
                 {
@@ -401,11 +429,16 @@ namespace XHeadSender
                             throw new IOException($"Short bulk write: {transferred}/{slice.Length} bytes");
 
                         bytesSent += transferred;
+                        uint ringStatus = AcknowledgeRing();
+                        ringMinimum = Math.Min(ringMinimum, ringStatus);
+                        ringMaximum = Math.Max(ringMaximum, ringStatus);
+                        ringHandshakes++;
                         double targetSeconds = bytesSent * 8.0 / bitrate;
                         while (!_streamStopRequested && timer.Elapsed.TotalSeconds + 0.001 < targetSeconds)
                             Thread.Sleep(1);
                     }
                 }
+                Console.WriteLine($"[DirectUSB] リングACK: {ringHandshakes:N0}回, status={ringMinimum}..{ringMaximum}");
             }
             catch (Exception ex)
             {
@@ -420,6 +453,9 @@ namespace XHeadSender
             long packets = 0;
             long slices = 0;
             long nullPackets = 0;
+            long ringHandshakes = 0;
+            uint ringMinimum = uint.MaxValue;
+            uint ringMaximum = 0;
             try
             {
                 byte[] slice = new byte[SLICE_SIZE_BYTES];
@@ -463,6 +499,10 @@ namespace XHeadSender
                         throw new IOException($"Short bulk write: {transferred}/{slice.Length} bytes");
                     slices++;
                     bytesSent += transferred;
+                    uint ringStatus = AcknowledgeRing();
+                    ringMinimum = Math.Min(ringMinimum, ringStatus);
+                    ringMaximum = Math.Max(ringMaximum, ringStatus);
+                    ringHandshakes++;
                     double targetSeconds = bytesSent * 8.0 / bitrate;
                     while (!_streamStopRequested && timer.Elapsed.TotalSeconds + 0.001 < targetSeconds)
                         Thread.Sleep(1);
@@ -478,9 +518,27 @@ namespace XHeadSender
             }
             finally
             {
+                string ringStatusRange = ringHandshakes == 0 ? "n/a" : ringMinimum + ".." + ringMaximum;
                 Console.WriteLine($"[DirectUSB] UDP統計: datagrams={datagrams:N0}, input packets={packets:N0}, " +
-                    $"null fill={nullPackets:N0}, USB slices={slices:N0}");
+                    $"null fill={nullPackets:N0}, USB slices={slices:N0}, ring ACK={ringHandshakes:N0}, " +
+                    $"ring status={ringStatusRange}");
             }
+        }
+
+        /// <summary>
+        /// mnservice performs this exact read-then-zero-write sequence on 0x0629 about every
+        /// 20-23 ms for the entire lifetime of a bulk TS stream.  It is not merely diagnostic:
+        /// omitting it is the largest remaining protocol difference in direct-USB streaming and
+        /// leaves the device-side ring without the producer/consumer acknowledgement used by the
+        /// official path.
+        /// </summary>
+        private uint AcknowledgeRing()
+        {
+            SetAddress(0x0629);
+            uint status = ReadRegister();
+            SetAddress(0x0629);
+            WriteRegister(0);
+            return status;
         }
 
         private static void ReceiveAvailablePackets(UdpClient udp, IPEndPoint sender,
@@ -680,6 +738,12 @@ namespace XHeadSender
             SendControlTransfer(pkt, buffer);
             return ((uint)buffer[4] << 24) | ((uint)buffer[5] << 16) |
                    ((uint)buffer[6] << 8) | buffer[7];
+        }
+
+        private uint ReadAddress(ushort address)
+        {
+            SetAddress(address);
+            return ReadRegister();
         }
 
         private void WaitCommandFinish(string commandName)
