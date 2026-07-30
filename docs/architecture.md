@@ -21,7 +21,7 @@ xhead_studio.exe (GUI, .NET/WinForms, C#)
 service\mnservice.exe (バックグラウンドサービス, ネイティブC++)
         │  - FFmpeg (avcodec/avformat/avfilter/swscale/swresample) で映像/音声デコード
         │  - Pegasys TMPGEnc SDK (service\pegasys\*.vme) でエンコード
-        │  - libusbK 経由でXHEAD-USB実機にTS/制御コマンドを送出
+        │  - WinUSB 経由でXHEAD-USB実機にTS/制御コマンドを送出
         ▼
 XHEAD-USB (実機) --USB--> OFDM変調 --RF(同軸)--> (今回はRTL-SDRへループバック)
 ```
@@ -37,6 +37,32 @@ XHEAD-USB (実機) --USB--> OFDM変調 --RF(同軸)--> (今回はRTL-SDRへル�
     レジスタ制御、TS bulk転送、リング消費開始条件まで復元済み。
     `0x0600=2`は開始状態ではなく`stopModulation`命令で、正しい開始順序は
     `RFSTART(0x1000) → START(1) → bulk TS`である。
+
+### PC負荷と最低動作要件の考え方
+
+STUDIOの比較的高いPC要件は、XHEAD-USBのUSB制御やOFDM変調そのものより、入力映像を
+リアルタイムでTSへ変換するソフトウェア処理に由来する可能性が高い。解析で
+`mnservice.exe`がFFmpegによるデコードとPegasys TMPGEnc SDKによる映像・音声エンコードを
+行うことを確認している。一方、OFDM変調は完成TSを受け取ったXHEAD-USB実機側が担当する。
+
+処理負荷は利用形態によって分けて考える必要がある。
+
+| 利用形態 | 主なPC側処理 | 想定負荷 |
+|---|---|---|
+| 画面・動画をSTUDIOでリアルタイム送出 | デコード、リサイズ、MPEG-2/H.264・音声エンコード、多重化 | 高い |
+| 完成TSを直接USB送出 | ファイル読み出し、約17〜20 Mbit/sのペーシング、WinUSB bulk転送 | 低いと推定 |
+| 完成TSへサービス名・EPGを反映して送出 | 上記にTSDuckのSDT/NIT/EIT書き換えを追加 | 比較的低いと推定 |
+| 複数素材を再エンコード・再多重化 | デコードとエンコードを再実行 | 高い |
+
+フルセグTSが17〜20 Mbit/sなら、PCからUSBへ渡す実データ量は概ね毎秒2〜2.5 MBであり、
+USB転送量だけを見れば高性能CPUを必要とする規模ではない。実際に直接USB経路では、
+完成TSの連続送信、TSDuck加工、DTV03A-1TUでの復調まで成立している。
+
+ただし、低スペックPCでの厳密な最低要件はまだ実測していない。「古い省電力CPUと数GB RAMでも
+動く可能性が高い」は現時点では構成からの推定であり、保証値ではない。最低要件を確定するには、
+CPU・メモリ使用率、USB転送失敗、TS continuity error、受信側transport errorを、
+TSDuck加工あり／なしで長時間測定する必要がある。したがって公式STUDIOの推奨要件を
+そのままXHEAD-USB変調器単体の最低要件と解釈しないこと。
 
 ## 3. 重要な発見: 隠しDebugモード
 

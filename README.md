@@ -99,6 +99,18 @@ decompiled/            公式アプリのデコンパイル結果（著作権上
   （電波を実際に空中線から放射せず、有線ループバックで送出信号を安全に受信・解析する構成）
 - フルセグ復調確認用: DTV03A-1TU（Digibest ISDBT2071）、`px4_drv`のWinUSBドライバ
 
+### PC要件について
+
+STUDIOのPC負荷は、主としてFFmpeg/TMPGEnc SDKによるリアルタイム映像・音声エンコードに
+由来すると考えられる。完成済みフルセグTSを直接USBで送る場合、PC側の主処理は
+約17〜20 Mbit/s（約2〜2.5 MB/s）の読み出し・ペーシング・USB転送であり、必要性能は
+STUDIOのリアルタイム送出より大幅に低い可能性が高い。TSDuckによるサービス名・EPGの
+テーブル加工も、映像再エンコードと比べれば軽量と見込まれる。
+
+ただし低スペック機での最低CPU・メモリは未実測であり、現時点では保証値を示せない。
+詳しい根拠、利用形態別の負荷、今後の測定項目は
+[docs/architecture.md](docs/architecture.md#pc負荷と最低動作要件の考え方)を参照。
+
 ## 独自送出ツール (tools/custom_sender)
 
 C#製。公式インストール済みの `mnClientDotNet.dll` を参照して `mnservice.exe` (localhost:50051) に直接 gRPC接続する。**vendor DLLはリポジトリに含めず**、ローカルの `C:\Program Files\Micomsoft\XHEAD-STUDIO` を参照する前提。CLIとGUIの両方を同じ実行ファイルで提供する。
@@ -153,12 +165,13 @@ TSDuckで入力TSのSDT/NIT/EITへ反映できる。キャプチャとカラー�
   「Mode」コンボ（DVB_T/J83A/ATSC/J83B/DTMB/ISDB_T/J83C、直接USBで確認済みの7値）でモード切替も可能
   （[続報19・20](docs/protocol/modulation_capabilities.md)）——選択したModeに応じて
   Constellationの選択肢や有効なフィールドが自動的に切り替わる。
-- **チャンネル・番組情報タブ**（mnservice.exe経由のみ）: サービス名・ネットワーク名・TS名・
+- **チャンネル・番組情報タブ**: サービス名・ネットワーク名・TS名・
   地域識別・放送事業者ID・リモコン番号・サービス番号・コピー制御・PCR PID・PMT PID
   （`mMTSChannelParam`/`mMTSProgramParam`、[続報14・21](docs/protocol/modulation_capabilities.md)）。
-- **EPGタブ**（mnservice.exe経由のみ）: モード・配信間隔・イベントID・ジャンル・タイトル・
+  直接USBではサービス名・サービスID・ネットワーク名をTSへ反映し、未対応項目は無効表示する。
+- **EPGタブ**: モード・配信間隔・イベントID・ジャンル・タイトル・
   番組内容（`mEPGSimpleParam`、[続報11・16](docs/protocol/modulation_capabilities.md)。
-  1件のみ・繰り返し配信という制約はハードウェア側の仕様）。
+  直接USBではTSDuckでEITへ反映する）。
 - **メディア・コーデックタブ**（mnservice.exe経由のみ）: エンコード速度・Video/Audio PID・
   レイテンシ・解像度・アスペクト比・フレームレート・音声チャンネル/サンプルレート/
   ビットレート・レート制御方式・GOP長・BMLファイル（`.xbml`選択ダイアログ付き、
@@ -168,10 +181,11 @@ TSDuckで入力TSのSDT/NIT/EITへ反映できる。キャプチャとカラー�
   GOP最小/最大フレーム数・GOP内Bピクチャ最大数・シーンチェンジ検出・TwoPass・映像レート・
   ビットレート最低/最高値・画質レベル・デバッグ機能——STUDIO本体のGUIを実際に操作して
   発見した、従来「STUDIOのコーデック設定タブは空」と誤って記録されていたフィールド群。
-- **ソースタブ**（mnservice.exe経由のみ）: RFのみ／デスクトップキャプチャ（実際の画面を送出）／
+- **ソースタブ**: RFのみ／デスクトップキャプチャ（実際の画面を送出）／
   動画ファイル指定（`.ts`等を選んで送出）／時刻スケジュール——STUDIO本体の基本動作
   （ファイル/画面を選んで送出）に加え、絶対日時または毎日の時刻に素材だけを自動切替できる。
-  スケジュール切替中もチャンネルとRFは維持する。
+  スケジュール切替中もチャンネルとRFは維持する。直接USBでは完成TSとスケジュールに対応し、
+  キャプチャとカラーバー生成はmnservice.exe内蔵エンコーダ依存のため無効になる。
 
 スケジュールファイルは`時刻|素材パス`を1行に1件記述する。`#`行はコメント、相対パスは
 スケジュールファイルの場所を基準に解決する。
