@@ -1647,6 +1647,14 @@ ProgramAdd/Commitまで成功したが、素材開始前の`ChannelStart`がDead
 direct USBの`0x0600=0x2000`を送ってRF停止を保証、実機は`Present=True / Status=OK`。
 既存GUIを終了した排他状態での再試験が必要であり、「実機切替確認済み」とは扱わない。
 
+**排他状態での再試験**: GUI終了後に再実行したが、最初の`ChannelStart`が同じく
+DeadlineExceededとなった。サービス停止後にdirect USBの停止コマンドを送り、Windowsの
+`pnputil /restart-device`でXHEAD-USBを再起動するとPnPは`Status=OK`へ戻ったものの、その後
+`mnservice.exe`は`ObjectOutputModulation`を列挙できなかった。STUDIOを通常起動する初期化も
+サービスを維持できず終了した。Windows上の論理デバイス再起動だけでは、過去に有効だった
+物理USB抜き差しを完全には代替できないことが分かった。RF停止済み、関連プロセス残留なし。
+物理抜き差し後に改めて`--scheduletest`を実行する必要がある。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に
