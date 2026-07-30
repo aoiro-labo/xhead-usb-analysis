@@ -149,8 +149,9 @@ XHEAD-2にはBML設定用の内蔵Webサーバー（`XHEAD-2_BML_WEB.pdf`参照�
       （ライブブレークポイント）で広範に実施。「アドレス設定(0x4A)→読み書き(0x4E/0x4F)」の
       汎用レジスタバスプロトコルを解読し、ISDB-T変調パラメータのレジスタアドレスをほぼ完全に
       マップ化（[tools/usb_capture](../tools/usb_capture)、[tools/native_analysis](../tools/native_analysis)）。
-- [x] USB通信をUSBPcapで実キャプチャ → WinUSB経由で完了。バルク転送(24064バイト=MPEG-TS
-      188バイト×128、224スライスのリングバッファ)の生TSフレーミング、コントロール転送の
+- [x] USB通信をUSBPcapで実キャプチャ → WinUSB経由で完了。USBスライスは24064バイト
+      （MPEG-TS 188バイト×128）、個数は`(bitrate / 192512 + 1) * 2`で動的に決まる。
+      ペイロードは連続TSを32-bitワード単位でbyte reverseした形式。コントロール転送の
       周期的なレジスタ読み出しパターンを確認。当初はフロー制御通知と解釈していたが、
       後の全呼び出し元解析で`0x4A`（アドレス設定）→`0x4E`（8バイト読み出し）という
       汎用レジスタバスだと訂正済み（[tools/usb_capture](../tools/usb_capture)）。

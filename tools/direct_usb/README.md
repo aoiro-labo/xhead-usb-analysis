@@ -475,3 +475,27 @@ error 121となった。いずれも単独の開始条件ではない。
 `ProgramApply`で行われるTSハードウェア初期化を再現していない点である。公式USBキャプチャの
 control transferは1242件に達する一方、直制御の設定列は約40件しかない。次の調査は
 `ProgramApply`〜`SourceStart`間の追加レジスタ列の復元に集中する。
+
+### 続報9 (2026-07-30): リング寸法式と`0x2100` program routing tableを特定
+
+Ghidraでスライスアロケータ`FUN_14038ac60`の呼び出し元を遡り、変換開始関数
+`FUN_14039b6a0`を特定した。ソフトウェアリングは次の引数で確保される:
+
+```text
+slice_size  = 0x5e00 = 24064 bytes = 188-byte TS × 128
+slice_count = (bitrate / 0x2f000 + 1) * 2
+alignment   = 5
+```
+
+従来ログの224スライスはその採取時ビットレートの結果であり固定値ではない。20 Mbpsでは
+208スライスになる。
+
+さらにXHEAD用の具象クラスをRTTI/vtableから
+`mazo::mplatform::mTransformOutput::Output`と特定した。`ProgramApply`時はそのvtable
+`+0x40`（`FUN_140088c20`）が、チャンネル、番組、各ストリームの情報から最大4096バイトの
+`mModulationPlayload`を構築する。構築成功時だけ末尾に`0xff0082ff`を追加してvalidフラグを立て、
+変換開始処理がこの可変長ブロックをハードウェアアドレス`0x2100`へ32-bit word列として書く。
+
+したがって開始条件は単なる追加レジスタ1個ではない。入力TSのProgram/PID/stream種別に対応した
+正しいrouting tableを先に適用する必要がある。固定ダンプの流用は避け、次はこのbuilderを
+自前実装するか、低位block-write関数で実データを採取してフォーマットを照合する。

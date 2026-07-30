@@ -1,0 +1,4 @@
+.logopen /t C:\Users\aoiro\cdb_programapply_writes.log
+bu mnservice+0x88500 ".if (@r8 == 0x2100) { .printf \"UNEXPECTED_SINGLE_2100 value=%x\\n\", @r9; .detach; q; } .else { gc; }"
+bu mnservice+0x883b0 ".if (@r8 == 0x2100) { .printf \"XHEAD_2100 words=%x buffer=%p\\n\", poi(@rsp+0x28), @r9; dd @r9 L100; .detach; q; } .else { gc; }"
+g

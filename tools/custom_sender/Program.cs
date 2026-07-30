@@ -151,6 +151,21 @@ namespace XHeadSender
                 return RunScheduleSwitchTest(args[index + 1], args[index + 2], holdSeconds);
             }
 
+            if (args.Contains("--ringcapturetest"))
+            {
+                int index = Array.IndexOf(args, "--ringcapturetest");
+                if (index + 1 >= args.Length)
+                {
+                    Console.Error.WriteLine("使い方: --ringcapturetest <file> [--pause-seconds 15]");
+                    return 2;
+                }
+                int pauseSeconds = 15;
+                int pauseIndex = Array.IndexOf(args, "--pause-seconds");
+                if (pauseIndex >= 0 && pauseIndex + 1 < args.Length)
+                    pauseSeconds = Convert.ToInt32(args[pauseIndex + 1]);
+                return RunRingCaptureTest(args[index + 1], pauseSeconds);
+            }
+
             if (args.Contains("--make-xbml"))
             {
                 int index = Array.IndexOf(args, "--make-xbml");
@@ -560,6 +575,55 @@ namespace XHeadSender
                 catch (Exception ex) { Console.Error.WriteLine("[ScheduleTest] RF停止エラー: " + ex.Message); }
                 try { if (session.Connected) session.Disconnect(); }
                 catch (Exception ex) { Console.Error.WriteLine("[ScheduleTest] 切断エラー: " + ex.Message); }
+            }
+        }
+
+        /// <summary>
+        /// Diagnostic split point for attaching a debugger only after ChannelStart has completed.
+        /// This avoids perturbing the timing-sensitive modulation writes while allowing capture of
+        /// the later SourceOpen -> ProgramApply -> SourceStart hardware activity.
+        /// </summary>
+        private static int RunRingCaptureTest(string sourceFile, int pauseSeconds)
+        {
+            if (!System.IO.File.Exists(sourceFile))
+            {
+                Console.Error.WriteLine("テスト素材が見つかりません: " + sourceFile);
+                return 2;
+            }
+            if (pauseSeconds < 1 || pauseSeconds > 120)
+            {
+                Console.Error.WriteLine("--pause-secondsは1〜120秒で指定してください。");
+                return 2;
+            }
+
+            Console.WriteLine("=== Ring-start capture test ===");
+            var session = new GuiSession();
+            try
+            {
+                session.Connect();
+                session.StartChannel(new ModulationConfig { DACGain = -30 });
+                Console.WriteLine($"[RingCapture] CHANNEL_READY PID={System.Diagnostics.Process.GetCurrentProcess().Id}; " +
+                    $"debugger attach window={pauseSeconds}s");
+                Console.Out.Flush();
+                Thread.Sleep(pauseSeconds * 1000);
+                Console.WriteLine("[RingCapture] Starting SourceOpen -> ProgramApply -> SourceStart");
+                Console.Out.Flush();
+                session.StartUrlSource(sourceFile);
+                Thread.Sleep(3000);
+                Console.WriteLine("[RingCapture] Completed.");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("[RingCapture] エラー: " + ex.Message);
+                return 1;
+            }
+            finally
+            {
+                try { if (session.ChannelStarted) session.StopChannel(); }
+                catch (Exception ex) { Console.Error.WriteLine("[RingCapture] RF停止エラー: " + ex.Message); }
+                try { if (session.Connected) session.Disconnect(); }
+                catch (Exception ex) { Console.Error.WriteLine("[RingCapture] 切断エラー: " + ex.Message); }
             }
         }
 
