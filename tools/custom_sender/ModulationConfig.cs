@@ -86,11 +86,11 @@ namespace XHeadSender
         public int TransferCharacteristics = 0; // Video group FieldID=14, ColorPrimariesと同じenum系統
         public int MatrixCoefficients = 0;      // Video group FieldID=15, 0=Automatic(既定) 1=ITU_R_BT_709 2=Unspecified 3=FCC 4=ITU_R_BT_470_2_System_B_G 5=SMPTE_170M 6=SMPTE_240M
         public bool EnableDebugFunction = false; // 先頭Functions(FieldID=1, FieldFlags) flag1=EnableDebug。flag2=EnableOutputFileは未使用のため固定0
-        public uint BitrateRatio = 50;          // Quality group FieldID=26, 0-255。STUDIOの「映像レート」スライダに相当
-        public uint MinBitrateRatio = 50;       // Quality group FieldID=27, 0-255。STUDIOの「最低値」
-        public uint MaxBitrateRatio = 50;       // Quality group FieldID=28, 0-255。STUDIOの「最高値」
+        public uint BitrateRatio = 85;          // Quality group FieldID=26, 0-255。1080i向け高画質既定
+        public uint MinBitrateRatio = 60;       // Quality group FieldID=27, 0-255。VBR時の最低値
+        public uint MaxBitrateRatio = 100;      // Quality group FieldID=28, 0-255。VBR時の最高値
         public uint BFrameCount = 2;            // Quality group FieldID=29, 0-2。STUDIOの「GOP内連続Bピクチャ最大数」
-        public uint QualityRatio = 50;          // Quality group FieldID=30, 0-100。STUDIOの「画質レベル」
+        public uint QualityRatio = 75;          // Quality group FieldID=30, 0-100。VBRQuality時の画質目標
         public uint GOPMinLength = 0;           // Quality group FieldID=34, 0-60
         public uint GOPMaxLength = 0;           // Quality group FieldID=35, 0-60
         public bool EnableDetechSceneChange = true; // Quality.Functions(FieldID=24, FieldFlags) flag1。STUDIOは既定ON

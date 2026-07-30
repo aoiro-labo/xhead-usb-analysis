@@ -277,7 +277,14 @@ namespace XHeadSender
                     $"AudioPID=0x{cfg.AudioPID:X} Latency={cfg.Latency} QueueTime={cfg.QueueTime} " +
                     $"Resolution={cfg.VideoResolution} AspectRatio={cfg.VideoAspectRatio} FrameRate={cfg.VideoFrameRate} " +
                     $"AudioChannel={cfg.AudioChannel} SampleRate={cfg.AudioSampleRate} AudioBitrate={cfg.AudioBitrate} " +
-                    $"QualityMode={cfg.QualityMode} GOPLength={cfg.GOPLength} BMLFile={cfg.BMLFile}");
+                    $"QualityMode={cfg.QualityMode} BitrateRatio={cfg.BitrateRatio} " +
+                    $"Min/Max={cfg.MinBitrateRatio}/{cfg.MaxBitrateRatio} QualityRatio={cfg.QualityRatio} " +
+                    $"GOPLength={cfg.GOPLength} BMLFile={cfg.BMLFile}");
+                if (cfg.Constellation <= 1 && (cfg.VideoResolution == 0 || cfg.VideoResolution == 1))
+                {
+                    Console.WriteLine("[GUI] 警告: DQPSK/QPSKの伝送容量では1080p/1080iが低ビットレートに" +
+                        "なりやすいです。受信環境に余裕があれば64QAM・3/4・GI 1/8を推奨します。");
+                }
 
                 var startReq = new msRequest { Cmd = msServiceCmd.CmdChannelStart, ClientID = _msClient.HandleID, HandleID = _chHandle };
                 startReq.Properties.AddRange(channelStartProps);

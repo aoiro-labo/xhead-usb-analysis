@@ -441,14 +441,14 @@ namespace XHeadSender
                 "mPSEncodeParam.Quality.Functions flag1(EnableDetechSceneChange)。STUDIOは既定ON。");
             _chkEnableTwoPass = AddCheckBox(codecLayout, "TwoPass", false,
                 "mPSEncodeParam.Quality.Functions flag2(EnableTwoPass)。STUDIOは既定OFF。");
-            _numBitrateRatio = AddNumeric(codecLayout, "映像レート", 0, 255, 50,
-                "mPSEncodeParam.Quality.BitrateRatio。STUDIOの「映像レート」スライダに相当(0-255)。");
-            _numMinBitrateRatio = AddNumeric(codecLayout, "ビットレート最低値", 0, 255, 50,
-                "mPSEncodeParam.Quality.MinBitrateRatio。");
-            _numMaxBitrateRatio = AddNumeric(codecLayout, "ビットレート最高値", 0, 255, 50,
-                "mPSEncodeParam.Quality.MaxBitrateRatio。");
-            _numQualityRatio = AddNumeric(codecLayout, "画質レベル", 0, 100, 50,
-                "mPSEncodeParam.Quality.QualityRatio。STUDIOの「画質レベル」に相当(0-100)。");
+            _numBitrateRatio = AddNumeric(codecLayout, "映像レート", 0, 255, 85,
+                "映像へ割り当てるレート。1080iは85を推奨。");
+            _numMinBitrateRatio = AddNumeric(codecLayout, "ビットレート最低値", 0, 255, 60,
+                "VBR時の最低レート。CBRでは通常使いません。");
+            _numMaxBitrateRatio = AddNumeric(codecLayout, "ビットレート最高値", 0, 255, 100,
+                "VBR時の最高レート。CBRでは通常使いません。");
+            _numQualityRatio = AddNumeric(codecLayout, "画質レベル", 0, 100, 75,
+                "VBRQuality時の画質目標。CBRでは映像レートを優先します。");
             _chkEnableDebugFunction = AddCheckBox(codecLayout, "デバッグ機能を有効にする", false,
                 "mPSEncodeParam.Functions flag1(EnableDebug)。STUDIOは既定OFF、通常は変更不要。");
 
@@ -479,7 +479,7 @@ namespace XHeadSender
                 new ComboItem(1, "QPSK"),
                 new ComboItem(2, "16QAM"),
                 new ComboItem(3, "64QAM"),
-            }, 1, "変調方式のキャリア変調(Constellation)。選択したModeによって有効な値が変わる。");
+            }, 3, "64QAMは高画質向け。QPSKは強い一方、1080iには容量不足になりやすいです。");
             _numBandwidth = AddNumeric(modLayout, "帯域幅 (MHz)", 0, 10, 6,
                 "占有帯域幅(MHz)。日本のISDB-Tは通常6MHz固定。");
             _cmbFFT = AddCombo(modLayout, "FFTモード", new[]
@@ -495,14 +495,14 @@ namespace XHeadSender
                 new ComboItem(2, "3/4"),
                 new ComboItem(3, "5/6"),
                 new ComboItem(4, "7/8"),
-            }, 3, "畳み込み符号の符号化率。値が大きいほど伝送効率は上がるが誤り耐性は下がる。");
+            }, 2, "3/4を標準とします。値を上げると容量は増えますが誤り耐性が下がります。");
             _cmbGuardInterval = AddCombo(modLayout, "ガードインターバル", new[]
             {
                 new ComboItem(0, "1/32"),
                 new ComboItem(1, "1/16"),
                 new ComboItem(2, "1/8 (フルセグ既定)"),
                 new ComboItem(3, "1/4"),
-            }, 1, "シンボル間のガードインターバル比。マルチパス耐性と伝送効率のトレードオフ。");
+            }, 2, "フルセグの標準値は1/8。長くすると耐性と引き換えに容量が減ります。");
             _cmbTimeInterleavce = AddCombo(modLayout, "時間インターリーブ", new[]
             {
                 new ComboItem(1, "モード1"),
