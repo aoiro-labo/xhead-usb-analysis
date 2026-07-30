@@ -136,6 +136,21 @@ namespace XHeadSender
                 }
             }
 
+            if (args.Contains("--scheduletest"))
+            {
+                int index = Array.IndexOf(args, "--scheduletest");
+                if (index + 2 >= args.Length)
+                {
+                    Console.Error.WriteLine("使い方: --scheduletest <file1> <file2> [--hold-seconds 8]");
+                    return 2;
+                }
+                int holdSeconds = 8;
+                int holdIndex = Array.IndexOf(args, "--hold-seconds");
+                if (holdIndex >= 0 && holdIndex + 1 < args.Length)
+                    holdSeconds = Convert.ToInt32(args[holdIndex + 1]);
+                return RunScheduleSwitchTest(args[index + 1], args[index + 2], holdSeconds);
+            }
+
             if (args.Contains("--make-xbml"))
             {
                 int index = Array.IndexOf(args, "--make-xbml");
@@ -503,6 +518,48 @@ namespace XHeadSender
             finally
             {
                 session.Close();
+            }
+        }
+
+        private static int RunScheduleSwitchTest(string firstFile, string secondFile, int holdSeconds)
+        {
+            if (!System.IO.File.Exists(firstFile) || !System.IO.File.Exists(secondFile))
+            {
+                Console.Error.WriteLine("テスト素材が見つかりません。");
+                return 2;
+            }
+            if (holdSeconds < 1 || holdSeconds > 60)
+            {
+                Console.Error.WriteLine("--hold-secondsは1〜60秒で指定してください。");
+                return 2;
+            }
+
+            Console.WriteLine("=== Scheduled source switch test (GUI backend lifecycle) ===");
+            var session = new GuiSession();
+            try
+            {
+                session.Connect();
+                session.StartChannel(new ModulationConfig());
+                Console.WriteLine("[ScheduleTest] 素材1開始: " + firstFile);
+                session.StartUrlSource(firstFile);
+                Thread.Sleep(holdSeconds * 1000);
+                Console.WriteLine("[ScheduleTest] 素材2へ切替: " + secondFile);
+                session.SwitchUrlSource(secondFile);
+                Thread.Sleep(holdSeconds * 1000);
+                Console.WriteLine("[ScheduleTest] 正常完了。停止します。");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("[ScheduleTest] エラー: " + ex.Message);
+                return 1;
+            }
+            finally
+            {
+                try { if (session.ChannelStarted) session.StopChannel(); }
+                catch (Exception ex) { Console.Error.WriteLine("[ScheduleTest] RF停止エラー: " + ex.Message); }
+                try { if (session.Connected) session.Disconnect(); }
+                catch (Exception ex) { Console.Error.WriteLine("[ScheduleTest] 切断エラー: " + ex.Message); }
             }
         }
 

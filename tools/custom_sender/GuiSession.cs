@@ -614,7 +614,7 @@ namespace XHeadSender
             {
                 try
                 {
-                    var disconnect = new msRequest { Cmd = msServiceCmd.CmdDisconnect, ClientID = 0 };
+                    var disconnect = new msRequest { Cmd = msServiceCmd.CmdDisconnect, ClientID = _msClient?.HandleID ?? 0 };
                     _client.disconnectService(disconnect, deadline: DateTime.UtcNow.AddSeconds(5));
                     Console.WriteLine("[GUI] disconnectService OK.");
                 }
@@ -622,7 +622,8 @@ namespace XHeadSender
                 {
                     Console.WriteLine($"[GUI] disconnect error: {ex.Message}");
                 }
-                _channel?.ShutdownAsync().Wait();
+                if (_channel != null && !_channel.ShutdownAsync().Wait(TimeSpan.FromSeconds(5)))
+                    Console.WriteLine("[GUI] gRPC channel shutdown timed out after 5 seconds.");
             }
             _client = null;
             _channel = null;
