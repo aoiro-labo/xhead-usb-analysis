@@ -218,6 +218,25 @@ namespace XHeadSender
                 }
             }
 
+            int guiFileTestIndex = Array.IndexOf(args, "--guifiletest");
+            if (guiFileTestIndex >= 0 && guiFileTestIndex + 1 < args.Length)
+            {
+                var session = new GuiSession();
+                try
+                {
+                    session.Connect();
+                    session.StartChannel(new ModulationConfig());
+                    session.StartUrlSource(args[guiFileTestIndex + 1]);
+                    Thread.Sleep(5000);
+                    session.StopChannel();
+                    return 0;
+                }
+                finally
+                {
+                    session.Disconnect();
+                }
+            }
+
             if (args.Contains("--directtest"))
             {
                 uint testMode = 5;

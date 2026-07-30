@@ -1703,6 +1703,18 @@ PID 0x0012のEIT p/f/scheduleを確認した。RegionID/BroadcasterID/RemoteCont
 CopyFlag/PCR・PMT PID変更は同等の安全なTS変換をまだ実装していないため、直接USB時は
 誤解を避けるため個別コントロールを無効表示する。
 
+### 続報34 (2026-07-30): mnservice GUI送出をTVTestで実受信、停止回復を修正
+
+GUIのmnservice.exe経由で録画TSを送出し、TVTestで`VAT-01`サービス、1920×1080映像、
+Stereo音声、EPG番組情報を実受信した。`ChannelStart → SourceOpen → ProgramApply →
+SourceStart`の送出経路が実受信機でも成立している。
+
+初回停止時は`SourceClose`成功後の`ChannelStop`でvendorサービスがDeadlineExceededとなり、
+続くサービス停止もDisconnect例外で中断した。ソース終了後に500ms待機し、ChannelStopの
+成否にかかわらずChannelClose・内部状態解除へ進むよう変更した。また「サービス停止」は
+gRPC切断が既に失敗していても必ずプロセス停止を実行する。GUIと同じセッション実装を使う
+`--guifiletest`で同じ録画TSを5秒送出し、停止・切断まで`exit=0`で再現確認した。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

@@ -15,11 +15,11 @@ namespace XHeadSender
         // (DTMB/J83Cはmnservice.exe経由だとハングするが、direct_usb単体なら安全と確認済み
         // -- 続報22・24。DVB_T2は最小列のみRF確認済みで固有レジスタが未解読のため対象外)。
         public uint Mode = 5;
-        public int Constellation = 1;        // FieldID=19, 0=DQPSK 1=QPSK 2=QAM16 3=QAM64
+        public int Constellation = 3;        // FieldID=19, 0=DQPSK 1=QPSK 2=QAM16 3=QAM64
         public uint Bandwidth = 6;           // FieldID=20, MHz, 宣言上0-10
         public int FFT = 1;                  // FieldID=21, 0=_2k 1=_8k 2=_4k
-        public int CodeRate = 3;             // FieldID=22, 0=1/2 1=2/3 2=3/4 3=5/6 4=7/8
-        public int GuardInterval = 1;        // FieldID=23, 0=1/32 1=1/16 2=1/8 3=1/4
+        public int CodeRate = 2;             // FieldID=22, 0=1/2 1=2/3 2=3/4 3=5/6 4=7/8
+        public int GuardInterval = 2;        // FieldID=23, 0=1/32 1=1/16 2=1/8 3=1/4
         public int TimeInterleavce = 3;      // FieldID=24, 1=Mode1 2=Mode2 3=Mode3
         // DTMB専用フィールド(続報22)。Carrier/FrameはDTMB以外のModeでは使われない。
         public uint Carrier = 0;             // DTMB専用, 0=CARRIER_3780(既定) 1=CARRIER_1

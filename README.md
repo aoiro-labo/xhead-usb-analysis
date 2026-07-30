@@ -133,6 +133,8 @@ GUIには`mnservice.exe`の「サービス起動」「サービス停止」ボ�
 「接続」でも未起動なら単体起動してUSB Output登録を待つ。RFを出さず接続と変調Output検出だけを
 確認する場合は`XHeadSender.exe --servicecheck`を使える。失敗時もcontrollerセッションを
 切断するため、再試行で`controller already exists`を残さない。
+実TSを使ってGUIと同じサービス経路の開始・5秒送出・停止・切断を診断する場合は
+`XHeadSender.exe --guifiletest input.ts`を使用できる。
 
 直接USBのISDB-T既定値は、DTV03A-1TUで実際にフルセグ復調できた
 64QAM・FFT 8k・符号化率3/4・GI 1/8・Time Interleave 3・16,851,216 bit/sである。

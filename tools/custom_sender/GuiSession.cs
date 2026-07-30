@@ -633,10 +633,21 @@ namespace XHeadSender
 
             if (SourceStarted) StopCaptureSourceInternal();
 
-            var stopReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = _msClient.HandleID, HandleID = _chHandle };
-            var stopResp = _client.sendRequest(stopReq, deadline: DateTime.UtcNow.AddSeconds(5));
-            Console.WriteLine($"[GUI] ChannelStop Result={stopResp.Result}");
-            CloseChannelInternal();
+            try
+            {
+                // Give the native source teardown worker a short window before destroying the
+                // modulation channel. Some multi-program TS inputs complete SourceClose before
+                // their worker thread has fully left the encoder pipeline.
+                Thread.Sleep(500);
+                var stopReq = new msRequest { Cmd = msServiceCmd.CmdChannelStop, ClientID = _msClient.HandleID, HandleID = _chHandle };
+                var stopResp = _client.sendRequest(stopReq, deadline: DateTime.UtcNow.AddSeconds(8));
+                Console.WriteLine($"[GUI] ChannelStop Result={stopResp.Result}");
+            }
+            finally
+            {
+                // Never retain a false "started" state when the vendor service crashes or times out.
+                CloseChannelInternal();
+            }
         }
 
         private void CloseChannelInternal()
@@ -660,7 +671,11 @@ namespace XHeadSender
 
         public void Disconnect()
         {
-            if (ChannelStarted) StopChannel();
+            if (ChannelStarted)
+            {
+                try { StopChannel(); }
+                catch (Exception ex) { Console.WriteLine($"[GUI] StopChannel during disconnect error: {ex.Message}"); }
+            }
             if (_client != null)
             {
                 try

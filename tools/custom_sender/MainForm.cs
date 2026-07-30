@@ -1011,10 +1011,16 @@ namespace XHeadSender
         private async void BtnStopService_Click(object sender, EventArgs e)
         {
             _btnStopService.Enabled = false;
+            Exception disconnectError = null;
             try
             {
                 if (_session.Connected)
-                    await Task.Run(() => _session.Disconnect());
+                {
+                    try { await Task.Run(() => _session.Disconnect()); }
+                    catch (Exception ex) { disconnectError = ex; }
+                }
+                // Service termination is process-level recovery and must run even if gRPC is
+                // already unavailable or the native service crashed during ChannelStop.
                 await Task.Run(() => GuiSession.StopMnservice());
                 SetStatus("未接続（サービス停止）", Color.DimGray);
                 _btnConnect.Enabled = true;
@@ -1023,6 +1029,8 @@ namespace XHeadSender
                 _btnDisconnect.Enabled = false;
                 _rbBackendService.Enabled = true;
                 _rbBackendDirect.Enabled = true;
+                if (disconnectError != null)
+                    Console.WriteLine("gRPC切断には失敗しましたが、サービス停止処理は完了しました: " + disconnectError.Message);
             }
             catch (Exception ex)
             {
