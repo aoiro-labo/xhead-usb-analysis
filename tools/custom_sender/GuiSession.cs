@@ -376,10 +376,16 @@ namespace XHeadSender
             }
         }
 
+        public void SwitchUrlSource(string filePath)
+        {
+            if (!ChannelStarted) throw new InvalidOperationException("先に送出を開始してください。");
+            if (SourceStarted) StopCaptureSourceInternal();
+            StartUrlSource(filePath);
+        }
+
         /// <summary>
         /// 2026-07-26: 自己完結カラーバー/サイントーン(SourceTranscode)。外部ファイル・
-        /// キャプチャデバイス不要でRF出力を確認できる、STUDIO自体には無い機能
-        /// (docs/protocol/modulation_capabilities.md「続報8」)。
+        /// キャプチャデバイス不要でRF出力を確認できる、STUDIO同等の機能。
         ///
         /// 既知の問題: `SourceOpen`が`RpcException(Unknown, "Unexpected error in RPC handling")`
         /// を確実に投げる。`--verbose-grpc`でgRPCの詳細ログを取ったところ、これは

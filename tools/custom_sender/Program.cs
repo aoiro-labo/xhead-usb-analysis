@@ -110,6 +110,32 @@ namespace XHeadSender
         [STAThread]
         private static int Main(string[] args)
         {
+            if (args.Contains("--validate-schedule"))
+            {
+                int index = Array.IndexOf(args, "--validate-schedule");
+                if (index + 1 >= args.Length)
+                {
+                    Console.Error.WriteLine("使い方: --validate-schedule <schedule.txt>");
+                    return 2;
+                }
+                try
+                {
+                    var entries = SourceSchedule.Load(args[index + 1]);
+                    Console.WriteLine($"スケジュール: {entries.Count}件");
+                    foreach (var entry in entries)
+                        Console.WriteLine((entry.Start?.ToString("yyyy-MM-dd HH:mm:ss") ??
+                            "毎日 " + entry.DailyTime.Value.ToString(@"hh\:mm\:ss")) + " | " + entry.Path);
+                    var active = SourceSchedule.GetActive(entries, DateTime.Now);
+                    Console.WriteLine("現在の素材: " + (active?.Path ?? "(開始時刻待ち)"));
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine("スケジュールエラー: " + ex.Message);
+                    return 1;
+                }
+            }
+
             if (args.Contains("--make-xbml"))
             {
                 int index = Array.IndexOf(args, "--make-xbml");

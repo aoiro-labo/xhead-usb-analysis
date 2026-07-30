@@ -163,8 +163,20 @@ GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情�
   ビットレート最低/最高値・画質レベル・デバッグ機能——STUDIO本体のGUIを実際に操作して
   発見した、従来「STUDIOのコーデック設定タブは空」と誤って記録されていたフィールド群。
 - **ソースタブ**（mnservice.exe経由のみ）: RFのみ／デスクトップキャプチャ（実際の画面を送出）／
-  動画ファイル指定（`.ts`等を選んで送出）——STUDIO本体の基本動作（ファイル/画面を選んで送出
-  開始）に相当する機能をGUI・CLI（`--sourceurl`）両方で実現している。
+  動画ファイル指定（`.ts`等を選んで送出）／時刻スケジュール——STUDIO本体の基本動作
+  （ファイル/画面を選んで送出）に加え、絶対日時または毎日の時刻に素材だけを自動切替できる。
+  スケジュール切替中もチャンネルとRFは維持する。
+
+スケジュールファイルは`時刻|素材パス`を1行に1件記述する。`#`行はコメント、相対パスは
+スケジュールファイルの場所を基準に解決する。
+
+```text
+2026-07-30 18:00:00|C:\Videos\program-1.ts
+2026-07-30 19:00:00|C:\Videos\program-2.ts
+毎日 20:00:00|evening.ts
+```
+
+GUIで使う前に`XHeadSender.exe --validate-schedule schedule.txt`で全素材の存在と形式を検査できる。
 
 CLIには他にモード切替（`--dvbt`/`--atsc`/`--j83b`等、[続報12・13](docs/protocol/modulation_capabilities.md)参照——`--dtmb`/`--j83c`は`mnservice.exe`をハングさせるため非推奨）、
 カラーバー自己完結生成（`--colorbar`、[続報8](docs/protocol/modulation_capabilities.md)参照、

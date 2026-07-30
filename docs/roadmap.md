@@ -82,3 +82,8 @@ TSDuckのEIT/PSI処理、PID remap、bitrate調整を前段で行い、完成TS�
 この結果、番組ごとのEITはTSファイル段階では実現可能と確認できた。字幕・データ放送は、
 既に正しく多重化されたTSなら無加工保持できる。別素材から新規に番組へ追加する場合はPMTの
 stream typeとARIB descriptorが必要なため、対象素材を解析してから個別に定義する。
+
+GUIには時刻スケジュールソースも追加した。絶対日時と「毎日HH:mm:ss」を混在でき、
+`SourceStop → SourceClose → SourceOpen → ProgramApply → SourceStart`でRFチャンネルを維持したまま
+素材だけを切り替える。各素材へ対応したEIT入りTSを事前生成して登録すれば、時刻に応じて
+番組本体とそのEIT・字幕・データ放送を一組で切り替える構成にできる。

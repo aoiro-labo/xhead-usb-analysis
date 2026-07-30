@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Text;
 using System.Threading.Tasks;
@@ -47,8 +48,11 @@ namespace XHeadSender
         private RadioButton _rbSourceCapture;
         private RadioButton _rbSourceColorbar;
         private RadioButton _rbSourceUrl;
+        private RadioButton _rbSourceSchedule;
         private TextBox _txtUrlPath;
         private Button _btnBrowseUrl;
+        private TextBox _txtSchedulePath;
+        private Button _btnBrowseSchedule;
         private Label _lblStatus;
         private NumericUpDown _numFrequency;
         private ComboBox _cmbMode;
@@ -116,6 +120,10 @@ namespace XHeadSender
         private TabPage _mediaTab;
         private TabPage _codecTab;
         private bool _updatingSourceRadios;
+        private readonly Timer _scheduleTimer = new Timer { Interval = 1000 };
+        private List<SourceScheduleEntry> _scheduleEntries;
+        private string _scheduledSourcePath;
+        private bool _scheduleSwitching;
 
         public MainForm()
         {
@@ -127,6 +135,7 @@ namespace XHeadSender
             Font = new Font("Yu Gothic UI", 9f);
 
             BuildControls();
+            _scheduleTimer.Tick += ScheduleTimer_Tick;
 
             Console.SetOut(new TextBoxWriter(_txtLog));
             Console.WriteLine("XHeadSender GUI 起動。");
@@ -194,6 +203,7 @@ namespace XHeadSender
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            sourceLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             _rbSourceNone = new RadioButton { Text = "RFのみ（既定、送出内容なし）", AutoSize = true, Checked = true, Margin = new Padding(0, 4, 0, 2) };
             SetHelpTip(_rbSourceNone, "RFだけを出力します。映像・音声は含みません。");
@@ -215,6 +225,16 @@ namespace XHeadSender
             urlRow.Controls.Add(_txtUrlPath);
             urlRow.Controls.Add(_btnBrowseUrl);
 
+            var scheduleRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0, 2, 0, 4) };
+            _rbSourceSchedule = new RadioButton { Text = "時刻スケジュール:", AutoSize = true, Anchor = AnchorStyles.Left };
+            _txtSchedulePath = new TextBox { Width = 280, Anchor = AnchorStyles.Left, Margin = new Padding(4, 3, 4, 3) };
+            _btnBrowseSchedule = new Button { Text = "参照...", Width = 70, Anchor = AnchorStyles.Left };
+            _btnBrowseSchedule.Click += BtnBrowseSchedule_Click;
+            SetHelpTip(_rbSourceSchedule, "日時または毎日の時刻に合わせて動画・TS素材を自動切替します。");
+            scheduleRow.Controls.Add(_rbSourceSchedule);
+            scheduleRow.Controls.Add(_txtSchedulePath);
+            scheduleRow.Controls.Add(_btnBrowseSchedule);
+
             // WinFormsのRadioButtonは「直接の親コンテナが同じ」場合のみ自動的に排他選択される。
             // _rbSourceUrlだけ別のコンテナ(urlRow、テキストボックス+参照ボタンと横並びにするため)に
             // 入っているため、_rbSourceNone/_rbSourceCaptureとは自動排他の対象外になってしまう
@@ -224,11 +244,13 @@ namespace XHeadSender
             _rbSourceCapture.CheckedChanged += SourceRadioChanged;
             _rbSourceColorbar.CheckedChanged += SourceRadioChanged;
             _rbSourceUrl.CheckedChanged += SourceRadioChanged;
+            _rbSourceSchedule.CheckedChanged += SourceRadioChanged;
 
             sourceLayout.Controls.Add(_rbSourceNone, 0, 0);
             sourceLayout.Controls.Add(_rbSourceCapture, 0, 1);
             sourceLayout.Controls.Add(_rbSourceColorbar, 0, 2);
             sourceLayout.Controls.Add(urlRow, 0, 3);
+            sourceLayout.Controls.Add(scheduleRow, 0, 4);
 
             var metaLayout = NewParamTable();
             metaLayout.Padding = new Padding(10, 10, 6, 10);
@@ -743,6 +765,7 @@ namespace XHeadSender
                 if (changed != _rbSourceCapture) _rbSourceCapture.Checked = false;
                 if (changed != _rbSourceColorbar) _rbSourceColorbar.Checked = false;
                 if (changed != _rbSourceUrl) _rbSourceUrl.Checked = false;
+                if (changed != _rbSourceSchedule) _rbSourceSchedule.Checked = false;
             }
             finally
             {
@@ -909,6 +932,9 @@ namespace XHeadSender
             _rbSourceUrl.Enabled = enabled;
             _txtUrlPath.Enabled = enabled;
             _btnBrowseUrl.Enabled = enabled;
+            _rbSourceSchedule.Enabled = enabled;
+            _txtSchedulePath.Enabled = enabled;
+            _btnBrowseSchedule.Enabled = enabled;
         }
 
         private void BtnBrowseUrl_Click(object sender, EventArgs e)
@@ -919,6 +945,18 @@ namespace XHeadSender
                 {
                     _txtUrlPath.Text = dlg.FileName;
                     _rbSourceUrl.Checked = true;
+                }
+            }
+        }
+
+        private void BtnBrowseSchedule_Click(object sender, EventArgs e)
+        {
+            using (var dlg = new OpenFileDialog { Filter = "XHeadスケジュール (*.txt)|*.txt|すべてのファイル (*.*)|*.*" })
+            {
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    _txtSchedulePath.Text = dlg.FileName;
+                    _rbSourceSchedule.Checked = true;
                 }
             }
         }
@@ -961,9 +999,18 @@ namespace XHeadSender
             bool attachCapture = _rbSourceCapture.Checked;
             bool attachColorbar = _rbSourceColorbar.Checked;
             bool attachUrl = _rbSourceUrl.Checked;
+            bool attachSchedule = _rbSourceSchedule.Checked;
             string urlPath = _txtUrlPath.Text;
+            string schedulePath = _txtSchedulePath.Text;
             try
             {
+                SourceScheduleEntry initialScheduleEntry = null;
+                if (attachSchedule)
+                {
+                    _scheduleEntries = SourceSchedule.Load(schedulePath);
+                    initialScheduleEntry = SourceSchedule.GetActive(_scheduleEntries, DateTime.Now);
+                    _scheduledSourcePath = initialScheduleEntry?.Path;
+                }
                 await Task.Run(() =>
                 {
                     _session.StartChannel(cfg);
@@ -979,12 +1026,20 @@ namespace XHeadSender
                     {
                         _session.StartUrlSource(urlPath);
                     }
+                    else if (attachSchedule && initialScheduleEntry != null)
+                    {
+                        _session.StartUrlSource(initialScheduleEntry.Path);
+                    }
                 });
                 string label = attachCapture ? "送出中（デスクトップキャプチャ添付）" :
                     attachColorbar ? "送出中（カラーバー添付）" :
-                    attachUrl ? "送出中（動画ファイル添付）" : "送出中（RFのみ）";
+                    attachUrl ? "送出中（動画ファイル添付）" :
+                    attachSchedule ? (initialScheduleEntry == null ? "送出中（スケジュール待機、RFのみ）" :
+                        "送出中（スケジュール: " + System.IO.Path.GetFileName(initialScheduleEntry.Path) + "）") :
+                    "送出中（RFのみ）";
                 SetStatus(label, Color.SeaGreen);
                 _btnStop.Enabled = true;
+                if (attachSchedule) _scheduleTimer.Start();
             }
             catch (Exception ex)
             {
@@ -1007,6 +1062,7 @@ namespace XHeadSender
 
         private async void BtnStop_Click(object sender, EventArgs e)
         {
+            StopSchedule();
             _btnStop.Enabled = false;
             try
             {
@@ -1033,6 +1089,7 @@ namespace XHeadSender
 
         private async void BtnDisconnect_Click(object sender, EventArgs e)
         {
+            StopSchedule();
             _btnDisconnect.Enabled = false;
             _btnStart.Enabled = false;
             _btnStop.Enabled = false;
@@ -1059,6 +1116,41 @@ namespace XHeadSender
                 _rbBackendDirect.Enabled = true;
                 SetSourceControlsEnabled(true);
             }
+        }
+
+        private async void ScheduleTimer_Tick(object sender, EventArgs e)
+        {
+            if (_scheduleSwitching || _scheduleEntries == null || !_session.ChannelStarted) return;
+            SourceScheduleEntry active = SourceSchedule.GetActive(_scheduleEntries, DateTime.Now);
+            if (active == null || string.Equals(active.Path, _scheduledSourcePath, StringComparison.OrdinalIgnoreCase)) return;
+
+            _scheduleSwitching = true;
+            _scheduleTimer.Stop();
+            try
+            {
+                Console.WriteLine($"[GUI] スケジュール切替: {active.Path}");
+                await Task.Run(() => _session.SwitchUrlSource(active.Path));
+                _scheduledSourcePath = active.Path;
+                SetStatus("送出中（スケジュール: " + System.IO.Path.GetFileName(active.Path) + "）", Color.SeaGreen);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[GUI] スケジュール切替失敗: " + ex.Message);
+                SetStatus("送出中（スケジュール切替失敗）", Color.DarkOrange);
+            }
+            finally
+            {
+                _scheduleSwitching = false;
+                if (_scheduleEntries != null && _session.ChannelStarted) _scheduleTimer.Start();
+            }
+        }
+
+        private void StopSchedule()
+        {
+            _scheduleTimer.Stop();
+            _scheduleEntries = null;
+            _scheduledSourcePath = null;
+            _scheduleSwitching = false;
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
