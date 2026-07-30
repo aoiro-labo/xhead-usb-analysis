@@ -307,16 +307,14 @@ namespace XHeadSender
                             }
                             else if (args.Contains("--dvbt2alt"))
                             {
-                                // 2026-07-27 (続報24 investigation): the default DVB_T2 field combination
-                                // above was rejected with "modulation param invalid". Ghidra decompilation
-                                // of mmodulation_param.cc's validation (docs/protocol/modulation_capabilities.md)
-                                // showed this is genuine DVB-T2 spec compatibility checking (FFT x PilotPattern
-                                // x CodeRate x GuardInterval x FEC), not a hardware gate -- so the DEFAULT
-                                // per-field values (each individually "sensible" but not necessarily a jointly
-                                // valid combination) may simply not form a spec-valid set together. Trying a
-                                // more conventional real-world DVB-T2 profile here: FEC_64800 (far more common
-                                // in real broadcasts than the default FEC_16200), PP_2 (a simpler/more broadly
-                                // compatible pilot pattern than the default PP_7), CR_2_3, GI_1_16.
+                                // 2026-07-30: static extraction of FUN_140393c20's compatibility tables proved
+                                // the descriptor defaults (8K/GI_1_32/PP_7/FEC_16200/CR_4_5) are jointly valid.
+                                // The rejection happens in the following bitrate calculation: it multiplies by
+                                // the packed ushort at DVB_T2 offset 44, exactly FECBlockNums (FieldID=38).
+                                // Its published default is zero, so the calculated bitrate is unconditionally
+                                // zero and ChannelStart reports "modulation param invalid". SymbolNums=0 has an
+                                // explicit auto-calculate path; FECBlockNums=0 does not. Preserve every validated
+                                // descriptor default and change only FECBlockNums to the smallest nonzero value.
                                 var altSpec = new ModeSpec
                                 {
                                     ModeValue = 7,
@@ -332,10 +330,10 @@ namespace XHeadSender
                                         (32u, msVariantType.VariantInt, 4, 0u),       // CodeRate=CR_4_5 (default)
                                         (33u, msVariantType.VariantInt, 0, 0u),       // GuardInterval=GI_1_32 (default)
                                         (34u, msVariantType.VariantInt, 6, 0u),       // PilotPattern=PP_7 (default)
-                                        (35u, msVariantType.VariantInt, 1, 0u),       // FEC=FEC_64800 (ONLY this changed from default)
+                                        (35u, msVariantType.VariantInt, 0, 0u),       // FEC=FEC_16200 (default; table-valid with CR_4_5)
                                         (36u, msVariantType.VariantUint, 0, 12421u),  // NetworkID (default)
                                         (37u, msVariantType.VariantUint, 0, 32769u),  // SystemID (default)
-                                        (38u, msVariantType.VariantUint, 0, 0u),      // FECBlockNums (default)
+                                        (38u, msVariantType.VariantUint, 0, 1u),      // FECBlockNums=1 (default 0 makes bitrate exactly zero)
                                         (39u, msVariantType.VariantUint, 0, 0u),      // SysmbolNums (default)
                                         (40u, msVariantType.VariantUint, 0, 0u),      // TINumber (default)
                                         (41u, msVariantType.VariantUint, 0, 0u),      // ISSYLength (default)

@@ -86,6 +86,12 @@ analyzeHeadless.bat <projectDir> <projectName> -process mnservice.exe -noanalysi
   `"mepg_simple.cc"`文字列も参照元関数0件）。EIT複数番組注入の静的解析は現状ここで
   行き詰まっている——記録として残す（他のBML/RFキャリブレーション探索と同様、空振りも
   再現性のある事実として残す方針）。
+- `XHeadDumpDvbt2Tables.java` — DVB-T2検証関数が参照するFFT×GuardInterval×PilotPattern表と
+  FEC×CodeRate表を生バイトで抽出する。既定の組み合わせが実際には有効で、拒否原因が後段の
+  `FECBlockNums=0`にあることを特定する際に使用した。
+- `XHeadFindUnsupportedModulation.java` — `FECBlockNums=1`で最初の検証を通過した後に出る
+  `"unsupported modulation mode"`の参照元を検索・デコンパイルする。Mode 7だけ
+  `mModulationClock`生成クラスが存在しない二段目のサービス側制限を特定した。
 
 ## cdbでの動的解析（ライブブレークポイント）
 

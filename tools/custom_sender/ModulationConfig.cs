@@ -13,7 +13,8 @@ namespace XHeadSender
         // DirectUsbSessionのみMode切替に対応(続報19・22): 0=DVB_T 2=ATSC 3=J83B 4=DTMB
         // 5=ISDB_T(既定) 6=J83C。実機で安全と確認済みのこの6値のみGUIから選択可能
         // (DTMB/J83Cはmnservice.exe経由だとハングするが、direct_usb単体なら安全と確認済み
-        // -- 続報22。J83A/DVB_T2は生レジスタでの実機挙動が未検証のため対象外)。
+        // -- 続報22。J83Aはdirect_usb CLIでRF確認済みだがGUI未統合、DVB_T2は最小列のみ
+        // RF確認済みで固有レジスタが未解読のため対象外)。
         public uint Mode = 5;
         public int Constellation = 1;        // FieldID=19, 0=DQPSK 1=QPSK 2=QAM16 3=QAM64
         public uint Bandwidth = 6;           // FieldID=20, MHz, 宣言上0-10

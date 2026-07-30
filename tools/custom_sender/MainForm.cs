@@ -424,7 +424,7 @@ namespace XHeadSender
                 "動作するが、mnservice.exe経由（「mnservice.exe経由」バックエンド選択時）だと" +
                 "サービス全体をハングさせる既知のバグがあるため、そちらでは絶対に選ばないこと" +
                 "(そもそもMode切替はmnservice.exe経由バックエンドでは無効化されている)。" +
-                "J83A/DVB_T2は実機での生レジスタ挙動が未検証のためGUIには意図的に出していない " +
+                "J83Aはdirect_usb CLIでRF確認済みだがGUI未統合、DVB_T2は最小Mode 7列のみ確認済みで固有レジスタが未解読のためGUIには意図的に出していない " +
                 "-- tools/direct_usb --mode の --force-untested-mode を使えばCLIからは試せる。");
             _cmbMode.SelectedIndexChanged += ModeChanged;
             _cmbConstellation = AddCombo(modLayout, "変調方式", new[]

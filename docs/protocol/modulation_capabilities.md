@@ -32,7 +32,7 @@ XHEAD-USBの出力オブジェクト: `ObjectType=ObjectOutputModulation`, `Path
 | `DTMB` (中国地デジ) | Constellation, Bandwidth, CodeRate(0.4/0.6/0.8), Carrier(3780/1), Frame(420/945/595), Interleave(240/720) | **サービスハング**（`mnservice.exe`が無応答に、実機は健全） |
 | **`ISDB_T`** | 下表参照 | 通常モード（本ドキュメントの主対象） |
 | `J83C` (日本ケーブルQAM) | Constellation(QAM64/256) | **サービスハング**（同上、単一フィールドでも発生） |
-| `DVB_T2` | Version, Bandwidth, Function(拡張キャリア/コンステレーション回転/HEM/Null Packet Deletion), L1Constellation, PLPConstellation, FFT(1k〜32k), CodeRate(1/2〜2/5), GuardInterval(1/32〜19/256), PilotPattern(PP1-8), FEC(16200/64800), NetworkID(既定0x3085=12421), SystemID(既定0x8001=32769), FECBlockNums, SysmbolNums, TINumber, ISSYLength | 安全な拒否（`modulation param invalid`） |
+| `DVB_T2` | Version, Bandwidth, Function(拡張キャリア/コンステレーション回転/HEM/Null Packet Deletion), L1Constellation, PLPConstellation, FFT(1k〜32k), CodeRate(1/2〜2/5), GuardInterval(1/32〜19/256), PilotPattern(PP1-8), FEC(16200/64800), NetworkID(既定0x3085=12421), SystemID(既定0x8001=32769), FECBlockNums, SysmbolNums, TINumber, ISSYLength | サービスは明示的にMode 7非対応。`direct_usb`最小列の実験RF出力は成功（規格準拠未確認） |
 
 DTMB/J83Cのハングは物理的な実機の抜き差し後も再現する**モード固有の本物のバグ**と確認済み
 （続報14の訂正を参照——同種のハング症状が別原因（USB接続の劣化）だったケースもあるため
@@ -1514,10 +1514,53 @@ DVB_T2のレジスタレベルでの足跡（11フィールド分）はcdbで一
   検証**であり、正しい組み合わせを見つければ`mnservice.exe`経由でも動作する可能性が
   ある。ただし2回の試行はいずれも失敗し、現時点で正しい組み合わせは未特定。
 
+> **続報25で訂正**: 互換表を直接抽出した結果、既定の組み合わせ自体は有効だった。
+> 真の第一拒否原因は`FECBlockNums=0`でビットレートが0になること。これを1にすると検証を
+> 通過するが、次段の変調クロック生成がMode 7を明示的に非対応として拒否する。
+
 再現コード: `tools/direct_usb/Program.cs`の`--mode 1`、`tools/custom_sender/Program.cs`の
 `--dvbt2alt`。静的解析: `tools/native_analysis/ghidra_scripts/XHeadFindModeValidation.java`・
 `XHeadDecodeModeValidationHelper.java`・`XHeadDecodeDvbt2Gate.java`。
 RF実測データ: `tools/rtlsdr_analysis/rtlsdr_j83a_direct_scan1/2/3.csv`。
+
+### 続報25 (2026-07-30): DVB-T2二重制限を完全解読、`direct_usb`ではMode 7の実験RF出力に成功
+
+Ghidraから`FUN_140393c20`が参照する互換表（`DAT_1404ae0d0`・`DAT_1404adec8`）を
+バイト単位で抽出した。フィールド配置はプロパティ記述子のOffsetと完全に一致し、既定値
+（FFT=8K、GI=1/32、PP7、FEC=16200、CR=4/5）は互換表上すべて有効だった。
+
+真の第一拒否原因は、その後の`FUN_1403943c0`にあった。DVB-T2の理論ビットレート計算は
+Offset 44の`uint16`、すなわち`FECBlockNums`を乗算するが、記述子の既定値は0である。
+`SymbolNums=0`には自動計算分岐がある一方、`FECBlockNums=0`には補完がなく、既定値では
+最終結果が必ず0になって`modulation param invalid`となる。
+
+`tools/custom_sender --dvbt2alt`を、他の既定値を一切変えず`FECBlockNums=1`だけ指定する形へ
+変更して実行したところ、`modulation param invalid`を突破し、次の
+`unsupported modulation mode : [7]`へ到達した。この文字列の参照元`FUN_1400a6e50`は
+`mModulationClock`生成ファクトリで、DVB_T/ISDB_T/DTMB/ATSC/J83A/B/C用クラスは持つが
+DVB_T2分岐だけ存在しない。つまり公式サービスには、パラメータ既定値バグに加えて
+**DVB-T2用TSクロック生成実装そのものが欠落**している。この拒否はUSB書き込み前であり、
+実機は影響を受けず健全だった。
+
+公式サービスからレジスタ列を捕捉できないため、`direct_usb`で既知の共通開始列と
+`0x0680=7`だけをDACGain=-30で短時間送信した（未知のDVB-T2固有アドレスは書いていない）。
+2回とも正常完走し、RTL-SDRで473MHzを中心とする再現性のある対称ピークを観測した
+（最大ベースライン比+43.0dB・+35.8dB）。既知の`--stop`で出力は消失し、実機は全工程で
+`Get-PnpDevice Status=OK`だった。
+
+これは**Mode 7の最小直接シーケンスが安全にRF出力する**ことの実証であり、規格準拠DVB-T2の
+成功ではない。スペクトルは広帯域プラトーではなく3本の強いピークが目立つ。DVB-T2固有16
+フィールドのレジスタ対応を特定し、正しいOFDM信号を確認する作業は引き続き未解決。
+
+再現コード・静的解析:
+
+- `tools/custom_sender/Program.cs`の`--dvbt2alt`
+- `tools/direct_usb/Program.cs`の`--mode 7`
+- `XHeadDumpDvbt2Tables.java` / `XHeadFindUnsupportedModulation.java`
+
+RF実測データ:
+`rtlsdr_dvbt2_direct_baseline.csv` / `rtlsdr_dvbt2_direct_active.csv` /
+`rtlsdr_dvbt2_direct_active2.csv` / `rtlsdr_dvbt2_direct_afterstop.csv`。
 
 ## 重要な注意事項
 
