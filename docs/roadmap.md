@@ -4,7 +4,8 @@
 
 字幕・複数イベントEPG・任意PSI/SIを最も自由に扱える構成は、TSDuck等で完成したMPEG-TSを作り、
 `mnservice.exe`非依存のdirect USB経路へ渡す方式である。現時点の最大の障害はコンテンツ形式では
-なく、最初の24064-byte bulk write後にデバイスがリングを継続消費しない点にある。
+なく、最初の24064-byte bulk write自体をデバイスが受理しない点にある。ネイティブと同じ
+100 ms timeoutで、転送済み0 byteのWin32 error 121として再現できる。
 
 ## 実現経路
 

@@ -455,5 +455,23 @@ PnP `Status=OK`を確認済み。
 したがって`0x0600=2`は必要なライフサイクル遷移ではあるものの、単独ではデバイス側の
 TSリング消費開始条件を満たさない。Ghidra静的解析では、`mnservice.exe`がUSB初期化時に
 各パイプへ`WinUsb_SetPipePolicy(..., PolicyType=3, ValueLength=4, ...)`を適用することも
-確認できた。PolicyType 3はWinUSBの転送タイムアウトであり、少なくとも無限待ちを安全に
-観測可能な失敗へ変えるため、直制御側への同等設定と値の特定を次の調査対象とする。
+確認できた。呼び出し元は`FUN_14007cdb0(device, 100)`なので値は100 msと確定し、直制御側にも
+同じ設定を実装した。以後は無限待ちせず、転送済み0 slice・Win32 error 121として観測できる。
+
+### 続報8 (2026-07-30): USB上のTS形式と複数インターフェースを再検証
+
+保存済みの公式bulk payloadを再解析すると、従来「各転送に3-byteヘッダがある」と解釈していた
+sync offset 3は、実際には**連続TSを32-bitワード単位でbyte reverseした結果**だった。
+USB上の`10 00 40 47 11 B0 00 00`を各4 byteごとに戻すと、有効なPAT先頭
+`47 40 00 10 00 00 B0 11`になる。ファイルTSと合成null TSの双方にこの変換を実装した。
+
+またXHEADは`{2F110364-...}`と、公式サービスがOutput pathとして使う
+`{DEE824EF-...}`の2つのvendor interfaceを公開する。後者へ変更し、同GUIDを使う別デバイスを
+誤選択しないよう`VID_17A7&PID_0008`でも選別した。ただし、正しいinterface・word reverse・
+`0x0600=2`・100 ms timeoutをすべて揃えた低出力試験でも、最初のbulk OUTは0 sliceのまま
+error 121となった。いずれも単独の開始条件ではない。
+
+残る最有力差分は、現在の直制御が`ChannelStart`の変調/RF列だけを再現し、
+`ProgramApply`で行われるTSハードウェア初期化を再現していない点である。公式USBキャプチャの
+control transferは1242件に達する一方、直制御の設定列は約40件しかない。次の調査は
+`ProgramApply`〜`SourceStart`間の追加レジスタ列の復元に集中する。

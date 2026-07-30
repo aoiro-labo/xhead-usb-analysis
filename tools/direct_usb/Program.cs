@@ -19,10 +19,10 @@ namespace XHeadDirectUsb
     /// </summary>
     internal static class Program
     {
-        // Device interface GUID for XHEAD-USB, read from this machine's registry:
-        // HKLM\SYSTEM\CurrentControlSet\Enum\USB\VID_17A7&PID_0008\<serial>\Device Parameters
-        //   DeviceInterfaceGUIDs = {2F110364-7C93-4684-B4DC-46D95D5B3A9D}
-        private static readonly Guid DeviceInterfaceGuid = new Guid("2F110364-7C93-4684-B4DC-46D95D5B3A9D");
+        // This device exposes two vendor interface paths. mnservice advertises and opens the
+        // DEE824EF path as its modulation Output; the 2F110364 path accepts register control
+        // transfers but its bulk OUT pipe does not consume TS data.
+        private static readonly Guid DeviceInterfaceGuid = new Guid("DEE824EF-729B-4A0E-9C14-B7117D33A817");
 
         private const byte REQ_SET_ADDRESS = 0x4A;
         private const byte REQ_READ = 0x4E;
@@ -34,6 +34,8 @@ namespace XHeadDirectUsb
         // Confirmed via USBPcap capture (tools/usb_capture/README.md): bulk OUT endpoint address 0x01.
         // WinUSB pipe IDs are the raw endpoint address byte, so this is usable directly with WinUsb_WritePipe.
         private const byte PIPE_ID_BULK_OUT = 0x01;
+        private const uint PIPE_TRANSFER_TIMEOUT = 3;
+        private const uint NATIVE_PIPE_TIMEOUT_MS = 100;
 
         // mslicebuffer.cc's own logged slice geometry: 24064 bytes = 128 x 188-byte MPEG-TS packets.
         private const int SLICE_SIZE_BYTES = 24064;
@@ -452,7 +454,11 @@ namespace XHeadDirectUsb
             {
                 while (sw.Elapsed.TotalSeconds < seconds)
                 {
-                    if (input != null) FillSliceFromTs(input, slice);
+                    if (input != null)
+                    {
+                        FillSliceFromTs(input, slice);
+                        SwapUsbWordsInPlace(slice);
+                    }
 
                     uint transferred;
                     bool ok = WinUsb_WritePipe(_winusbHandle, PIPE_ID_BULK_OUT, slice, (uint)slice.Length, out transferred, IntPtr.Zero);
@@ -542,7 +548,30 @@ namespace XHeadDirectUsb
                 }
                 cc = (byte)((cc + 1) & 0x0F);
             }
+            SwapUsbWordsInPlace(slice);
             return slice;
+        }
+
+        /// <summary>
+        /// The native USB payload is the continuous TS byte stream with every 32-bit word
+        /// byte-reversed. For example, USB bytes 10 00 40 47 11 B0 00 00 decode to the
+        /// valid PAT prefix 47 40 00 10 00 00 B0 11. The apparent sync offset 3 in the
+        /// original USBPcap analysis is a consequence of this bus word endianness.
+        /// </summary>
+        private static void SwapUsbWordsInPlace(byte[] buffer)
+        {
+            if ((buffer.Length & 3) != 0)
+                throw new ArgumentException("XHEAD USB slices must be a multiple of four bytes.", nameof(buffer));
+
+            for (int i = 0; i < buffer.Length; i += 4)
+            {
+                byte b0 = buffer[i];
+                byte b1 = buffer[i + 1];
+                buffer[i] = buffer[i + 3];
+                buffer[i + 1] = buffer[i + 2];
+                buffer[i + 2] = b1;
+                buffer[i + 3] = b0;
+            }
         }
 
         private static void SetAddress(ushort addr)
@@ -634,7 +663,17 @@ namespace XHeadDirectUsb
                 return false;
             }
 
+            uint timeoutMs = NATIVE_PIPE_TIMEOUT_MS;
+            if (!WinUsb_SetPipePolicy(_winusbHandle, PIPE_ID_BULK_OUT, PIPE_TRANSFER_TIMEOUT,
+                sizeof(uint), ref timeoutMs))
+            {
+                Console.WriteLine("  WinUsb_SetPipePolicy(PIPE_TRANSFER_TIMEOUT=100 ms) failed, Win32 error " +
+                    Marshal.GetLastWin32Error());
+                return false;
+            }
+
             Console.WriteLine("  WinUSB handle opened successfully.");
+            Console.WriteLine("  Bulk OUT timeout: 100 ms (matches mnservice mWinUSBDevice initialization).");
             return true;
         }
 
@@ -665,26 +704,28 @@ namespace XHeadDirectUsb
                 var ifData = new SP_DEVICE_INTERFACE_DATA();
                 ifData.cbSize = Marshal.SizeOf(ifData);
 
-                if (!SetupDiEnumDeviceInterfaces(hDevInfo, IntPtr.Zero, ref interfaceGuid, 0, ref ifData))
+                for (uint memberIndex = 0; ; memberIndex++)
                 {
-                    return null;
+                    ifData.cbSize = Marshal.SizeOf(ifData);
+                    if (!SetupDiEnumDeviceInterfaces(hDevInfo, IntPtr.Zero, ref interfaceGuid, memberIndex, ref ifData))
+                        return null;
+
+                    int requiredSize = 0;
+                    SetupDiGetDeviceInterfaceDetail(hDevInfo, ref ifData, IntPtr.Zero, 0, ref requiredSize, IntPtr.Zero);
+
+                    var detail = new SP_DEVICE_INTERFACE_DETAIL_DATA();
+                    // Well-known P/Invoke workaround: cbSize must be set to this fixed value
+                    // (NOT Marshal.SizeOf(detail), which is wrong here due to struct packing around
+                    // the embedded char array) -- 8 on x64, 6 on x86.
+                    detail.cbSize = IntPtr.Size == 8 ? 8 : 6;
+
+                    if (!SetupDiGetDeviceInterfaceDetail2(hDevInfo, ref ifData, ref detail, requiredSize,
+                        ref requiredSize, IntPtr.Zero))
+                        continue;
+
+                    if (detail.DevicePath.IndexOf("vid_17a7&pid_0008", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return detail.DevicePath;
                 }
-
-                int requiredSize = 0;
-                SetupDiGetDeviceInterfaceDetail(hDevInfo, ref ifData, IntPtr.Zero, 0, ref requiredSize, IntPtr.Zero);
-
-                var detail = new SP_DEVICE_INTERFACE_DETAIL_DATA();
-                // Well-known P/Invoke workaround: cbSize must be set to this fixed value
-                // (NOT Marshal.SizeOf(detail), which is wrong here due to struct packing around
-                // the embedded char array) -- 8 on x64, 6 on x86 (4-byte DWORD + 2-byte char
-                // alignment), regardless of the ByValTStr buffer length declared below.
-                detail.cbSize = IntPtr.Size == 8 ? 8 : 6;
-
-                if (!SetupDiGetDeviceInterfaceDetail2(hDevInfo, ref ifData, ref detail, requiredSize, ref requiredSize, IntPtr.Zero))
-                {
-                    return null;
-                }
-                return detail.DevicePath;
             }
             finally
             {
@@ -765,6 +806,10 @@ namespace XHeadDirectUsb
         [DllImport("winusb.dll", SetLastError = true)]
         private static extern bool WinUsb_WritePipe(IntPtr interfaceHandle, byte pipeId,
             byte[] buffer, uint bufferLength, out uint lengthTransferred, IntPtr overlapped);
+
+        [DllImport("winusb.dll", SetLastError = true)]
+        private static extern bool WinUsb_SetPipePolicy(IntPtr interfaceHandle, byte pipeId,
+            uint policyType, uint valueLength, ref uint value);
     }
 
     internal sealed class SafeFileHandle : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
