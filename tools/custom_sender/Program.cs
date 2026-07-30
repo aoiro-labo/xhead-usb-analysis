@@ -123,7 +123,10 @@ namespace XHeadSender
                 uint testMode = 5;
                 int modeIdx = Array.IndexOf(args, "--mode");
                 if (modeIdx >= 0 && modeIdx + 1 < args.Length) testMode = Convert.ToUInt32(args[modeIdx + 1]);
-                return RunDirectUsbTest(testMode);
+                string tsFile = null;
+                int tsIdx = Array.IndexOf(args, "--ts-file");
+                if (tsIdx >= 0 && tsIdx + 1 < args.Length) tsFile = args[tsIdx + 1];
+                return RunDirectUsbTest(testMode, tsFile);
             }
 
             if (args.Contains("--verbose-grpc"))
@@ -392,17 +395,18 @@ namespace XHeadSender
         /// 2026-07-26: GUIの「直接USB」バックエンド(DirectUsbSession)を、gRPC接続を一切試みない
         /// 状態で単体検証するためのCLIパス。mnservice.exe/xhead_studio.exeを事前に停止しておく
         /// こと(WinUSBインターフェースを排他保持するため)。既定値(473000kHz/QPSK/6MHz/...)で
-        /// Open->StartChannel->8秒保持->StopChannel(実験的)->Closeを一通り実行する。
+        /// Open->StartChannel->8秒保持->StopChannel->Closeを一通り実行する。
         /// </summary>
-        private static int RunDirectUsbTest(uint mode = 5)
+        private static int RunDirectUsbTest(uint mode = 5, string tsFile = null)
         {
             Console.WriteLine("=== Direct USB backend test (bypasses mnservice.exe entirely) === Mode=" + mode);
             var session = new DirectUsbSession();
             var cfg = new ModulationConfig { Mode = mode };
-            // Per-mode valid Constellation raw values (docs/protocol/modulation_capabilities.md 続報19・22):
+            // Per-mode valid Constellation raw values (docs/protocol/modulation_capabilities.md 続報19・22・24):
             // DVB_T needs its own QAM64=4 (ISDB_T's default 1=QPSK isn't in DVB_T's enum), ATSC only
             // accepts 0=_8VSB, J83B/ISDB_T both happen to accept the ModulationConfig default (1).
             if (mode == 0) cfg.Constellation = 4;
+            else if (mode == 1) cfg.Constellation = 2;
             else if (mode == 2) cfg.Constellation = 0;
             else if (mode == 4) { cfg.Constellation = 2; cfg.Bandwidth = 8; cfg.CodeRate = 2; cfg.Carrier = 0; cfg.Frame = 1; cfg.TimeInterleavce = 3; }
             else if (mode == 6) cfg.Constellation = 2;
@@ -410,6 +414,7 @@ namespace XHeadSender
             {
                 session.Open();
                 session.StartChannel(cfg);
+                if (tsFile != null) session.StartTsStream(tsFile);
                 Console.WriteLine("  Holding 8s -- check RTL-SDR now...");
                 System.Threading.Thread.Sleep(8000);
                 session.StopChannel();

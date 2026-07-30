@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -29,12 +31,20 @@ namespace XHeadSender
         private const byte REQ_WRITE = 0x4F;
         private const byte BM_HOST_TO_DEVICE_VENDOR_DEVICE = 0x40;
         private const byte BM_DEVICE_TO_HOST_VENDOR_DEVICE = 0xC0;
+        private const byte PIPE_ID_BULK_OUT = 0x01;
+        private const int TS_PACKET_SIZE = 188;
+        private const int SLICE_SIZE_BYTES = 24064;
 
         private SafeUsbFileHandle _fileHandle;
         private IntPtr _winusbHandle = IntPtr.Zero;
+        private Thread _streamThread;
+        private volatile bool _streamStopRequested;
+        private Exception _streamError;
 
         public bool DeviceOpen => _winusbHandle != IntPtr.Zero;
         public bool ChannelStarted { get; private set; }
+        public bool StreamRunning => _streamThread != null && _streamThread.IsAlive;
+        public Exception StreamError => _streamError;
 
         public void Open()
         {
@@ -78,8 +88,8 @@ namespace XHeadSender
         /// あわせてATSC/J83Bは実機ネイティブキャプチャでConstellationしか書き込んでおらず、
         /// DVB_TはISDB_Tと違いTimeInterleavceを持たないことも確認済み -- cfg.Modeに応じて
         /// 書き込むフィールド集合をtools/direct_usb/Program.csのRunConfigureSequenceと
-        /// 同じ基準で切り替える。GUIの選択肢はcfg.Modeが実機で安全と確認済みの6値
-        /// (0=DVB_T/2=ATSC/3=J83B/4=DTMB/5=ISDB_T/6=J83C)に限定しているため、それ以外の値は
+        /// 同じ基準で切り替える。GUIの選択肢はcfg.Modeが実機で安全と確認済みの7値
+        /// (0=DVB_T/1=J83A/2=ATSC/3=J83B/4=DTMB/5=ISDB_T/6=J83C)に限定しているため、それ以外の値は
         /// 想定しない。DTMB(続報22)は独自のフィールド構成(Constellation/Bandwidth/CodeRate/
         /// Carrier/Frame/Interleave)を持ち、cdbで捕捉した実機ネイティブの書き込み順を
         /// そのまま再現する(CodeRateとCarrierが同一レジスタ0x0692へ連続して書き込まれ、
@@ -89,6 +99,8 @@ namespace XHeadSender
         {
             if (!DeviceOpen) throw new InvalidOperationException("先に開いてください。");
             if (ChannelStarted) throw new InvalidOperationException("既に送出中です。先に停止してください。");
+            if (cfg.Mode > 6)
+                throw new ArgumentOutOfRangeException(nameof(cfg.Mode), "GUI直接USBバックエンドで許可するModeは0〜6です。");
 
             byte dacByte = unchecked((byte)cfg.DACGain);
             uint dacPacked = (uint)((dacByte << 8) | dacByte);
@@ -156,29 +168,153 @@ namespace XHeadSender
         }
 
         /// <summary>
-        /// 実験的: mnservice.exe側のChannelStop時に観測された「0x0600=0x2000(teardown)」を
-        /// 送信してみるが、direct_usb経路単独での効果は未検証。確実な「送出停止」手段が
-        /// まだ判明していないため、最終手段は Close()(ハンドルを閉じるのみ、RFはそのまま
-        /// 出続ける可能性がある)。
+        /// 188-byte MPEG-TSファイルをWinUSB bulk OUTへ直接送る。mnservice.exeの
+        /// エンコーダ/マルチプレクサを一切使わない経路。EOFで先頭へ戻り、指定ビットレートで
+        /// ペーシングする。呼び出しは即時に戻り、送信は専用スレッドで継続する。
+        /// </summary>
+        public void StartTsStream(string path, long bitrate = 20000000)
+        {
+            if (!DeviceOpen || !ChannelStarted) throw new InvalidOperationException("先に直接USB送出を開始してください。");
+            if (StreamRunning) throw new InvalidOperationException("TSストリームは既に実行中です。");
+            if (bitrate <= 0) throw new ArgumentOutOfRangeException(nameof(bitrate));
+            ValidateTsFile(path);
+
+            string fullPath = Path.GetFullPath(path);
+            _streamStopRequested = false;
+            _streamError = null;
+            _streamThread = new Thread(() => StreamTsWorker(fullPath, bitrate))
+            {
+                IsBackground = true,
+                Name = "XHEAD Direct USB TS"
+            };
+            _streamThread.Start();
+            Console.WriteLine($"[DirectUSB] TS送信開始: {fullPath}, {bitrate:N0} bit/s");
+        }
+
+        public void StopTsStream()
+        {
+            Thread thread = _streamThread;
+            if (thread == null) return;
+            _streamStopRequested = true;
+            // A synchronous WinUsb_WritePipe can wait indefinitely when the device-side ring is
+            // full. Abort only the bulk OUT pipe to release that wait; endpoint-0 control
+            // transfers remain usable for the RF stop command below.
+            WinUsb_AbortPipe(_winusbHandle, PIPE_ID_BULK_OUT);
+            if (thread.IsAlive && !thread.Join(5000))
+                throw new TimeoutException("直接USB TS送信スレッドが5秒以内に停止しませんでした。");
+            _streamThread = null;
+            WinUsb_ResetPipe(_winusbHandle, PIPE_ID_BULK_OUT);
+            Console.WriteLine("[DirectUSB] TS送信停止。");
+            if (_streamError != null) throw new InvalidOperationException("直接USB TS送信中にエラーが発生しました。", _streamError);
+        }
+
+        private void StreamTsWorker(string path, long bitrate)
+        {
+            try
+            {
+                byte[] slice = new byte[SLICE_SIZE_BYTES];
+                long bytesSent = 0;
+                var timer = Stopwatch.StartNew();
+                using (var input = File.OpenRead(path))
+                {
+                    while (!_streamStopRequested)
+                    {
+                        FillSlice(input, slice);
+                        uint transferred;
+                        if (!WinUsb_WritePipe(_winusbHandle, PIPE_ID_BULK_OUT, slice,
+                            (uint)slice.Length, out transferred, IntPtr.Zero))
+                        {
+                            if (_streamStopRequested) return;
+                            int error = Marshal.GetLastWin32Error();
+                            throw new InvalidOperationException($"WinUsb_WritePipe failed: 0x{error:X} ({error})");
+                        }
+                        if (transferred != slice.Length)
+                            throw new IOException($"Short bulk write: {transferred}/{slice.Length} bytes");
+
+                        bytesSent += transferred;
+                        double targetSeconds = bytesSent * 8.0 / bitrate;
+                        while (!_streamStopRequested && timer.Elapsed.TotalSeconds + 0.001 < targetSeconds)
+                            Thread.Sleep(1);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _streamError = ex;
+                Console.WriteLine("[DirectUSB] TS送信エラー: " + ex.Message);
+            }
+        }
+
+        private static void ValidateTsFile(string path)
+        {
+            if (!File.Exists(path)) throw new FileNotFoundException("TSファイルが見つかりません。", path);
+            var info = new FileInfo(path);
+            if (info.Length == 0 || info.Length % TS_PACKET_SIZE != 0)
+                throw new InvalidDataException($"TSファイルサイズは{TS_PACKET_SIZE}の倍数である必要があります。");
+            using (var input = File.OpenRead(path))
+            {
+                int packets = (int)Math.Min(32, info.Length / TS_PACKET_SIZE);
+                for (int packet = 0; packet < packets; packet++)
+                {
+                    if (input.ReadByte() != 0x47)
+                        throw new InvalidDataException($"TS同期バイトがありません: packet={packet}");
+                    input.Position += TS_PACKET_SIZE - 1;
+                }
+            }
+        }
+
+        private static void FillSlice(FileStream input, byte[] slice)
+        {
+            int offset = 0;
+            while (offset < slice.Length)
+            {
+                int read = input.Read(slice, offset, slice.Length - offset);
+                if (read == 0)
+                {
+                    input.Position = 0;
+                    continue;
+                }
+                offset += read;
+            }
+        }
+
+        /// <summary>
+        /// mnservice.exe側のChannelStop時に観測された「0x0600=0x2000(teardown)」を送信する。
+        /// direct_usb経路でRF出力がノイズフロアまで戻ることをRTL-SDRで実証済み。
         /// </summary>
         public void StopChannel()
         {
             if (!ChannelStarted) return;
-            Console.WriteLine("[DirectUSB] ChannelStop相当を試行(実験的、効果未検証: 0x0600=0x2000)...");
+            Exception streamStopError = null;
+            try { StopTsStream(); }
+            catch (Exception ex) { streamStopError = ex; }
+            Console.WriteLine("[DirectUSB] ChannelStopを送信(0x0600=0x2000)...");
             SetAddress(0x0600);
             Thread.Sleep(20);
             WriteRegister(0x2000);
             ChannelStarted = false;
-            Console.WriteLine("[DirectUSB] *** 停止コマンドを送信しました。RFが実際に止まったかは未検証です。 ***");
+            Console.WriteLine("[DirectUSB] *** 停止コマンドを送信しました。 ***");
+            if (streamStopError != null)
+                throw new InvalidOperationException("RF停止は完了しましたが、TS送信停止中にエラーが発生しました。", streamStopError);
         }
 
         public void Close()
         {
+            if (ChannelStarted)
+            {
+                try { StopChannel(); }
+                catch (Exception ex) { Console.WriteLine("[DirectUSB] Close時の送出停止エラー: " + ex.Message); }
+            }
             CloseInternal();
         }
 
         private void CloseInternal()
         {
+            if (StreamRunning)
+            {
+                try { StopTsStream(); }
+                catch (Exception ex) { Console.WriteLine("[DirectUSB] TS停止中のエラー: " + ex.Message); }
+            }
             if (_winusbHandle != IntPtr.Zero)
             {
                 WinUsb_Free(_winusbHandle);
@@ -328,6 +464,16 @@ namespace XHeadSender
         [DllImport("winusb.dll", SetLastError = true)]
         private static extern bool WinUsb_ControlTransfer(IntPtr interfaceHandle, RawSetupPacket setupPacket,
             byte[] buffer, uint bufferLength, out uint lengthTransferred, IntPtr overlapped);
+
+        [DllImport("winusb.dll", SetLastError = true)]
+        private static extern bool WinUsb_WritePipe(IntPtr interfaceHandle, byte pipeId,
+            byte[] buffer, uint bufferLength, out uint lengthTransferred, IntPtr overlapped);
+
+        [DllImport("winusb.dll", SetLastError = true)]
+        private static extern bool WinUsb_AbortPipe(IntPtr interfaceHandle, byte pipeId);
+
+        [DllImport("winusb.dll", SetLastError = true)]
+        private static extern bool WinUsb_ResetPipe(IntPtr interfaceHandle, byte pipeId);
     }
 
     internal sealed class SafeUsbFileHandle : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid

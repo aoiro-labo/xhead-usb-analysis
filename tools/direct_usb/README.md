@@ -20,6 +20,9 @@
 | TSバルク送出 | 実装済み。実TS・ビットレート制御版の実機再検証待ち |
 | GUI | `custom_sender`へ直接USBバックエンドとして統合済み |
 
+`custom_sender`側の直接USB GUIはDVB-T2を除く7 Modeに対応し、同バックエンドへ実TSバルク送信
+APIも移植済み。CLIからは`XHeadSender.exe --directtest --mode 5 --ts-file input.ts`で試せる。
+
 > **読み方**: 「使い方」「プロトコル実装」「現在の未解決事項」が最新情報。
 > 「実証結果」以降は発見順の解析ログで、古い仮説には訂正注記を付けている。
 

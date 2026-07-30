@@ -1562,6 +1562,24 @@ RF実測データ:
 `rtlsdr_dvbt2_direct_baseline.csv` / `rtlsdr_dvbt2_direct_active.csv` /
 `rtlsdr_dvbt2_direct_active2.csv` / `rtlsdr_dvbt2_direct_afterstop.csv`。
 
+### 続報26 (2026-07-30): J83Aを直接USB GUIへ統合、実TS送信APIもサービス非依存バックエンドへ移植
+
+`direct_usb` CLIで2回RF確認済みだったJ83Aを`custom_sender`の「直接USB」Modeコンボへ追加した。
+J83A固有のConstellation（16/32/64/128/256QAM）をMode切替時に動的表示し、GUIと同じ
+`DirectUsbSession`を使う`--directtest --mode 1`で開始・8秒保持・停止まで正常完走、
+実機`Status=OK`を確認した。GUI直接バックエンドはDVB-T2を除く7 Mode対応となった。
+
+さらに、`direct_usb` CLIにだけ存在した実TSバルク送信を`DirectUsbSession.StartTsStream`へ
+移植した。188バイト同期検証、EOFループ、20Mbit/sペーシング、バックグラウンド送信、
+停止・例外処理を備え、`--directtest --ts-file <path>`でgRPC・`mnservice.exe`なしに実行できる。
+
+実機試験では、送信開始後に同期`WinUsb_WritePipe`がデバイス側の未消費リングと思われる状態で
+待機し続けた。停止時にbulk OUTパイプだけを`WinUsb_AbortPipe`して待機を解除し、その後
+`0x0600=0x2000`を必ず送るようにした結果、TS送信・RFともクリーンに停止し、実機も健全だった。
+これは「データを適正レートで送るだけではデバイスが継続消費しない」という新しい再現結果で、
+次の課題はストリーミング中に公式サービスが読む`0x2000`台のリング位置レジスタを解読し、
+デバイス側の消費開始条件を再現すること。
+
 ## 重要な注意事項
 
 - **これは実機ファームウェアが内部的に持つ変調チップの能力表であり、Mode切り替えが実際に

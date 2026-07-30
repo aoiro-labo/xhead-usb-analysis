@@ -413,19 +413,19 @@ namespace XHeadSender
             _cmbMode = AddCombo(modLayout, "Mode（直接USB専用）", new[]
             {
                 new ComboItem(0, "DVB_T"),
+                new ComboItem(1, "J83A"),
                 new ComboItem(2, "ATSC"),
                 new ComboItem(3, "J83B"),
                 new ComboItem(4, "DTMB（注意）"),
                 new ComboItem(5, "ISDB_T (既定)"),
                 new ComboItem(6, "J83C（注意）"),
-            }, 4, "変調方式のMode切替(続報12・13・19・22)。「直接USB」接続方式でのみ有効 -- " +
-                "mnservice.exe経由バックエンドはISDB_T固定。ここに出ている6つは実機で安全に" +
+            }, 5, "変調方式のMode切替(続報12・13・19・22・24)。「直接USB」接続方式でのみ有効 -- " +
+                "mnservice.exe経由バックエンドはISDB_T固定。ここに出ている7つは実機で安全に" +
                 "送出できると確認済みのModeのみ。DTMB/J83Cは「直接USB」バックエンドでは正常に" +
                 "動作するが、mnservice.exe経由（「mnservice.exe経由」バックエンド選択時）だと" +
                 "サービス全体をハングさせる既知のバグがあるため、そちらでは絶対に選ばないこと" +
                 "(そもそもMode切替はmnservice.exe経由バックエンドでは無効化されている)。" +
-                "J83Aはdirect_usb CLIでRF確認済みだがGUI未統合、DVB_T2は最小Mode 7列のみ確認済みで固有レジスタが未解読のためGUIには意図的に出していない " +
-                "-- tools/direct_usb --mode の --force-untested-mode を使えばCLIからは試せる。");
+                "DVB_T2は最小Mode 7列のみ確認済みで固有レジスタが未解読のためGUIには意図的に出していない。");
             _cmbMode.SelectedIndexChanged += ModeChanged;
             _cmbConstellation = AddCombo(modLayout, "変調方式", new[]
             {
@@ -778,6 +778,11 @@ namespace XHeadSender
             {
                 case 0: // DVB_T
                     items = new[] { new ComboItem(0, "QPSK"), new ComboItem(2, "16QAM"), new ComboItem(4, "64QAM (既定)") };
+                    selectedIndex = 2;
+                    break;
+                case 1: // J83A
+                    items = new[] { new ComboItem(0, "16QAM"), new ComboItem(1, "32QAM"),
+                        new ComboItem(2, "64QAM (既定)"), new ComboItem(3, "128QAM"), new ComboItem(4, "256QAM") };
                     selectedIndex = 2;
                     break;
                 case 2: // ATSC

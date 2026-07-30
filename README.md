@@ -36,7 +36,7 @@
 | チャンネル/番組メタデータ（サービス名・NetworkID等）の変更 | **完了** | [docs/protocol/modulation_capabilities.md](docs/protocol/modulation_capabilities.md)「続報14」— GUIタブ実装後、`mMTSChannelParam`/`mMTSProgramParam`を明示的に上書きすると`ChannelStart`が`mnservice.exe`をハングさせる問題を発見し一時撤去。原因調査でXHEAD-STUDIO自身も同じ設定値で同様にハングすることを確認、プロトコル/フィールドの問題ではなく**長時間の検証作業によるUSB接続の劣化**と判明——実機を物理的に抜き差ししたところ即座に解消し、STUDIO・本ツールとも正常に送出できるようになった。GUI機能を復活済み（`tools/custom_sender`「チャンネル/番組情報」タブ）。DTMB/J83Cのハング（続報13）は抜き差し後も再現し、こちらは本物のモード固有バグと確認 |
 | RTL-SDRループバックでの実信号検証 | 完了 | [tools/rtlsdr_analysis](tools/rtlsdr_analysis) — 送出前後で470〜476MHz帯（6MHz幅、ISDB-Tの帯域幅と一致）に約38dBのパワー上昇を実測、送出停止で消失することも確認。設定した中心周波数473MHzとも一致 |
 | `mnservice.exe`ネイティブ側の生USBプロトコル解析 | 検証中 | [tools/usb_capture](tools/usb_capture) — バルク転送(24064バイト=MPEG-TS 188バイト×128、224スライスのリングバッファ)の生TSフレーミングを確認。コントロール転送は`mhal_modulation.cc`が使う「アドレス設定→データ読み書き」の汎用レジスタバスと判明。**ISDB-T変調パラメータ（Frequency/Bandwidth/Constellation/FFT/CodeRate/GuardInterval/TimeInterleavce）のレジスタアドレスをほぼ完全にマップ化**、DACGainも確定。フルライフサイクルキャプチャで新たに`0x0020`台（デバイス識別情報）を発見、`0x0629`はリングバッファ占有量ステータスの可能性が高いと判明。`0x1280`〜`0x1283`は`mazo::mbroadcast::mCalibration`という専用クラスによるRF較正データ読み出し機構と判明（**PAGainは直接レジスタに書かれず、この較正データと突き合わせて使われるソフトウェア側パラメータらしいと判明**）。バルク転送ヘッダは未解読 |
-| `mnservice.exe`を介さない直接制御（DLL/サービス完全非依存） | **全8 ModeでRF出力・停止を確認、GUI統合済み** | [tools/direct_usb](tools/direct_usb) — WinUSBで実機に直接接続し、解読したレジスタバスで読み書き・開始・停止を実証。DVB_T/J83A/ATSC/J83B/DTMB/ISDB_T/J83CはMode別の確認済み列で送出可能。DVB_T2も最小共通列と`0x0680=7`で2回連続して実験RF出力に成功したが、固有16フィールドのレジスタ対応と規格準拠は未確認。GUIの直接USBバックエンドは確認済み6 Modeを選択可能で、J83Aと実験段階のDVB_T2はCLIのみ。 |
+| `mnservice.exe`を介さない直接制御（DLL/サービス完全非依存） | **全8 ModeでRF出力・停止を確認、GUI統合済み** | [tools/direct_usb](tools/direct_usb) — WinUSBで実機に直接接続し、解読したレジスタバスで読み書き・開始・停止を実証。DVB_T/J83A/ATSC/J83B/DTMB/ISDB_T/J83CはMode別の確認済み列で送出可能。DVB_T2も最小共通列と`0x0680=7`で2回連続して実験RF出力に成功したが、固有16フィールドのレジスタ対応と規格準拠は未確認。GUIの直接USBバックエンドは確認済み7 Modeを選択可能で、実験段階のDVB_T2のみCLI限定。直接バックエンド用の実TSバルク送信APIも追加済み。 |
 
 </details>
 
@@ -121,7 +121,7 @@ GUI（`MainForm.cs`）はタブ構成（ソース／チャンネル・番組情�
 - **変調・RF電力設定タブ**: 周波数・Constellation・Bandwidth・FFT・CodeRate・
   GuardInterval・TimeInterleavce・RF電力(Level/PAGain/DACGain)を自由に設定でき、
   `ChannelStart`単体で変調器を実際にRF駆動できる。「直接USB」バックエンド選択時のみ、
-  「Mode」コンボ（DVB_T/ATSC/J83B/DTMB/ISDB_T/J83C、直接USBで確認済みの6値）でモード切替も可能
+  「Mode」コンボ（DVB_T/J83A/ATSC/J83B/DTMB/ISDB_T/J83C、直接USBで確認済みの7値）でモード切替も可能
   （[続報19・20](docs/protocol/modulation_capabilities.md)）——選択したModeに応じて
   Constellationの選択肢や有効なフィールドが自動的に切り替わる。
 - **チャンネル・番組情報タブ**（mnservice.exe経由のみ）: サービス名・ネットワーク名・TS名・
