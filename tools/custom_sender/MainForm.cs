@@ -56,6 +56,7 @@ namespace XHeadSender
         private Button _btnBrowseUrl;
         private CheckBox _chkDirectUseTSDuck;
         private NumericUpDown _numDirectTsBitrate;
+        private Button _btnCalculateDirectTsBitrate;
         private TextBox _txtSchedulePath;
         private Button _btnBrowseSchedule;
         private Label _lblStatus;
@@ -244,7 +245,7 @@ namespace XHeadSender
             {
                 Minimum = 100000,
                 Maximum = 100000000,
-                Value = 16851216,
+                Value = 18255835,
                 Increment = 1000,
                 ThousandsSeparator = true,
                 Width = 115,
@@ -253,8 +254,19 @@ namespace XHeadSender
             directTsRow.Controls.Add(_chkDirectUseTSDuck);
             directTsRow.Controls.Add(new Label { Text = "TSビットレート:", AutoSize = true, Padding = new Padding(10, 4, 0, 0) });
             directTsRow.Controls.Add(_numDirectTsBitrate);
+            _btnCalculateDirectTsBitrate = new Button { Text = "変調から計算", AutoSize = true, Anchor = AnchorStyles.Left };
+            _btnCalculateDirectTsBitrate.Click += (_, __) =>
+            {
+                var cfg = ReadConfigFromForm();
+                long calculated = IsdbTBitrate.Estimate13SegmentBitrate(cfg);
+                _numDirectTsBitrate.Value = Math.Min(_numDirectTsBitrate.Maximum,
+                    Math.Max(_numDirectTsBitrate.Minimum, calculated));
+                Console.WriteLine($"[GUI] ISDB-T 13セグ推定TS容量: {calculated:N0} bit/s");
+            };
+            directTsRow.Controls.Add(_btnCalculateDirectTsBitrate);
             directTsRow.Controls.Add(new Label { Text = "bps", AutoSize = true, Padding = new Padding(0, 4, 0, 0) });
             SetHelpTip(_chkDirectUseTSDuck, "サービス名・ネットワーク名・EPGを入力TSへ反映して送信します。OFFはTSを無加工で送信します。");
+            SetHelpTip(_btnCalculateDirectTsBitrate, "ISDB-Tの変調方式・符号化率・GIから13セグ容量を計算します。");
 
             var scheduleRow = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0, 2, 0, 4) };
             _rbSourceSchedule = new RadioButton { Text = "時刻スケジュール:", AutoSize = true, Anchor = AnchorStyles.Left };
@@ -830,6 +842,7 @@ namespace XHeadSender
             _rbSourceColorbar.Enabled = !direct;
             _chkDirectUseTSDuck.Enabled = direct;
             _numDirectTsBitrate.Enabled = direct;
+            _btnCalculateDirectTsBitrate.Enabled = direct;
             // Direct TS rewriting currently maps the fields which have safe TSDuck equivalents.
             // Keep the remaining mnservice-only controls visible but disabled to avoid implying
             // that RF register writes can change PSI/SI or encoder PID assignments.
@@ -1052,6 +1065,7 @@ namespace XHeadSender
             _btnBrowseUrl.Enabled = enabled;
             _chkDirectUseTSDuck.Enabled = enabled && UseDirectBackend;
             _numDirectTsBitrate.Enabled = enabled && UseDirectBackend;
+            _btnCalculateDirectTsBitrate.Enabled = enabled && UseDirectBackend;
             _rbSourceSchedule.Enabled = enabled;
             _txtSchedulePath.Enabled = enabled;
             _btnBrowseSchedule.Enabled = enabled;

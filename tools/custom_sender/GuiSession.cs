@@ -268,6 +268,7 @@ namespace XHeadSender
                 Console.WriteLine($"[GUI] ChannelStart: Frequency={cfg.Frequency}kHz Constellation={cfg.Constellation} " +
                     $"Bandwidth={cfg.Bandwidth} FFT={cfg.FFT} CodeRate={cfg.CodeRate} GuardInterval={cfg.GuardInterval} " +
                     $"TimeInterleavce={cfg.TimeInterleavce} Level={cfg.Level} PAGain={cfg.PAGain} DACGain={cfg.DACGain}");
+                Console.WriteLine($"[GUI] ISDB-T 13セグ推定TS容量: {IsdbTBitrate.Estimate13SegmentBitrate(cfg):N0} bit/s");
                 Console.WriteLine($"[GUI] Channel/Program: NetworkName={cfg.NetworkName} TSName={cfg.TSName} " +
                     $"RegionID={cfg.RegionID} BroadcasterID={cfg.BroadcasterID} RemoteControlKeyID={cfg.RemoteControlKeyID} " +
                     $"ServiceNo={cfg.ServiceNo} ServiceName={cfg.ServiceName} CopyFlag={cfg.CopyFlag}");

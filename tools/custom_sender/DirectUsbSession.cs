@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 
 namespace XHeadSender
@@ -260,14 +261,25 @@ namespace XHeadSender
             {
                 string fullPath = Path.GetFullPath(path);
                 string plugins = "";
+                string inputStuffing = "1/20";
                 if (metadata != null)
                 {
                     const int localTransportStreamId = 0x7E81;
                     const int localServiceId = 0x5C08;
-                    int sourceServiceId = FindFirstServiceId(tspPath, fullPath);
+                    SourceTsInfo sourceInfo = AnalyzeSourceTs(tspPath, fullPath);
+                    int sourceServiceId = sourceInfo.ServiceId;
+                    if (sourceInfo.Bitrate >= bitrate)
+                        throw new InvalidOperationException($"入力TSのPCRレート({sourceInfo.Bitrate:N0} bit/s)が" +
+                            $"送出容量({bitrate:N0} bit/s)以上です。高容量の変調設定か、再エンコードが必要です。");
+                    const int stuffingDenominator = 100000;
+                    int stuffingNumerator = Math.Max(1, (int)Math.Round(
+                        (bitrate / (double)sourceInfo.Bitrate - 1.0) * stuffingDenominator));
+                    inputStuffing = stuffingNumerator + "/" + stuffingDenominator;
                     Console.WriteLine($"[DirectUSB] 選択リマックス: source service={sourceServiceId} -> " +
                         $"service=0x{localServiceId:X4}, TSID/ONID=0x{localTransportStreamId:X4} " +
                         "(映像・音声・字幕・データPIDは維持)");
+                    Console.WriteLine($"[DirectUSB] CBR補充: input={sourceInfo.Bitrate:N0}, target={bitrate:N0} bit/s, " +
+                        $"add-input-stuffing={inputStuffing}");
                     _temporaryNitFile = CreateNitFile(metadata, localTransportStreamId, localServiceId);
                     _temporaryBitFile = CreateBitFile(metadata, localTransportStreamId);
                     plugins += $" -P zap --stuffing --eit {sourceServiceId}" +
@@ -295,7 +307,7 @@ namespace XHeadSender
                 var start = new ProcessStartInfo
                 {
                     FileName = tspPath,
-                    Arguments = $"--japan --add-input-stuffing 1/20 -I file --infinite {QuoteArgument(fullPath)}" +
+                    Arguments = $"--japan --add-input-stuffing {inputStuffing} -I file --infinite {QuoteArgument(fullPath)}" +
                         plugins + $" -P regulate --bitrate {bitrate} -O ip --packet-burst 7 127.0.0.1:{port}",
                     UseShellExecute = false,
                     CreateNoWindow = true
@@ -369,7 +381,13 @@ namespace XHeadSender
             return null;
         }
 
-        private static int FindFirstServiceId(string tspPath, string sourcePath)
+        private sealed class SourceTsInfo
+        {
+            public int ServiceId;
+            public long Bitrate;
+        }
+
+        private static SourceTsInfo AnalyzeSourceTs(string tspPath, string sourcePath)
         {
             string analyzePath = Path.Combine(Path.GetDirectoryName(tspPath), "tsanalyze.exe");
             if (!File.Exists(analyzePath))
@@ -377,7 +395,7 @@ namespace XHeadSender
             var info = new ProcessStartInfo
             {
                 FileName = analyzePath,
-                Arguments = "--service-list " + QuoteArgument(sourcePath),
+                Arguments = "--japan --normalized " + QuoteArgument(sourcePath),
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
@@ -386,20 +404,26 @@ namespace XHeadSender
             using (Process process = Process.Start(info))
             {
                 if (process == null) throw new InvalidOperationException("tsanalyze.exeを起動できませんでした。");
-                if (!process.WaitForExit(30000))
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+                if (!process.WaitForExit(60000))
                 {
                     process.Kill();
-                    throw new TimeoutException("入力TSのサービス解析が30秒以内に完了しませんでした。");
+                    throw new TimeoutException("入力TSのサービス/PCR解析が60秒以内に完了しませんでした。");
                 }
-                string output = process.StandardOutput.ReadToEnd();
-                string error = process.StandardError.ReadToEnd();
+                string output = outputTask.GetAwaiter().GetResult();
+                string error = errorTask.GetAwaiter().GetResult();
                 if (process.ExitCode != 0)
                     throw new InvalidOperationException("入力TSのサービス解析に失敗しました: " + error.Trim());
-                string[] fields = output.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                Match service = Regex.Match(output, @"(?m)^service:id=(\d+):");
+                Match ts = Regex.Match(output, @"(?m)^ts:.*?:bitrate=(\d+):");
                 int serviceId;
-                if (fields.Length == 0 || !int.TryParse(fields[0], out serviceId))
+                long sourceBitrate;
+                if (!service.Success || !int.TryParse(service.Groups[1].Value, out serviceId))
                     throw new InvalidOperationException("入力TSにサービスが見つかりません。");
-                return serviceId;
+                if (!ts.Success || !long.TryParse(ts.Groups[1].Value, out sourceBitrate) || sourceBitrate <= 0)
+                    throw new InvalidOperationException("入力TSのPCRビットレートを検出できません。");
+                return new SourceTsInfo { ServiceId = serviceId, Bitrate = sourceBitrate };
             }
         }
 
